@@ -4,5 +4,5 @@ import AppKit
 let app = NSApplication.shared
 let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)   // a real app: Dock icon, main window, plus the menu-bar item
 app.run()

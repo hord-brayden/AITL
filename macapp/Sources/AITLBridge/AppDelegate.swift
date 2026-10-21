@@ -20,11 +20,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateIcon()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         supervisor.start()
-        if !UserDefaults.standard.bool(forKey: "seenWindow") { UserDefaults.standard.set(true, forKey: "seenWindow"); DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.openWindow() } }
+        buildMainMenu()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.openWindow() }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.supervisor.refresh() }
     }
 
     func applicationWillTerminate(_ notification: Notification) { supervisor.stop() }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openWindow(); return true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }   // closing the window keeps the bridge alive in the menu bar
+
+    /// Standard app menu so ⌘Q, ⌘W, copy/paste and Settings work like any Mac app.
+    private func buildMainMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About AITL Bridge", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "AITL Manager…", action: #selector(openWindow), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide AITL Bridge", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Quit AITL Bridge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        let winItem = NSMenuItem(); main.addItem(winItem)
+        let win = NSMenu(title: "Window")
+        win.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        win.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winItem.submenu = win
+        NSApp.mainMenu = main
+    }
 
     // MARK: icon
     private func updateIcon() {
