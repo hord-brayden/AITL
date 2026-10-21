@@ -22,7 +22,14 @@ ICONSET="$SCRATCH/AppIcon.iconset"; rm -rf "$ICONSET"
 swift "$ROOT/scripts/make-icon.swift" "$ICONSET" >/dev/null
 iconutil --convert icns "$ICONSET" --output "$BUNDLE/Contents/Resources/AppIcon.icns"
 xattr -cr "$BUNDLE" 2>/dev/null || true
-info "Signing (ad-hoc)…"
-codesign --force --deep --sign - --timestamp=none --identifier "com.caeruli-obscuri.aitl" "$BUNDLE"
+SIGN_ID="${AITL_SIGN_ID:-}"
+if [[ -z "$SIGN_ID" ]] && security find-identity -v -p codesigning 2>/dev/null | grep -q "AITL Bridge Developer"; then SIGN_ID="AITL Bridge Developer"; fi
+if [[ -n "$SIGN_ID" ]]; then
+  info "Signing with '$SIGN_ID' (stable identity: privacy grants survive rebuilds)…"
+  codesign --force --deep --sign "$SIGN_ID" --timestamp=none --identifier "com.caeruli-obscuri.aitl" "$BUNDLE"
+else
+  info "Signing (ad-hoc; run scripts/make-signing-identity.sh once to keep macOS permissions across rebuilds)…"
+  codesign --force --deep --sign - --timestamp=none --identifier "com.caeruli-obscuri.aitl" "$BUNDLE"
+fi
 codesign --verify --strict "$BUNDLE" && ok "Signature verified"
 ok "$BUNDLE"
