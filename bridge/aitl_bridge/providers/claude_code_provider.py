@@ -23,6 +23,8 @@ class ClaudeCodeProvider(Provider):
         self.cfg = cfg
         self.session_id: str | None = None      # set by the session layer per chat before each stream()
         self.last_session_id: str | None = None
+        self.last_usage: dict | None = None
+        self.last_cost: float | None = None
 
     def available(self) -> bool:
         try:
@@ -79,6 +81,8 @@ class ClaudeCodeProvider(Provider):
                             final_text.append(b.text)
                 elif isinstance(msg, ResultMessage):
                     self.last_session_id = msg.session_id
+                    self.last_usage = dict(msg.usage or {})
+                    self.last_cost = msg.total_cost_usd
                     if msg.is_error:
                         raise ProviderError(f"Claude Code: {msg.result or msg.subtype}")
             if not streamed and final_text:

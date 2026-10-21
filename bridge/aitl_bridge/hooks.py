@@ -27,7 +27,8 @@ class HookServer:
         self.broadcast = broadcast
         self.port = port
         self.pending: dict[str, asyncio.Future] = {}
-        self.terminals: dict[str, dict[str, Any]] = {}   # session id -> {app, tty, project, at}: where that Claude Code session lives
+        self.terminals: dict[str, dict[str, Any]] = self._load_terminals()   # session id -> {app, tty, project, at}
+        self.state: dict[str, dict[str, Any]] | None = None   # shared.session_state, attached by the CLI
         self.admin = None                              # async (op, data) -> dict, attached by the CLI
         self.queued: list[dict[str, Any]] = []      # non-permission cards held while a permission is on screen
 
@@ -60,6 +61,10 @@ class HookServer:
                 status, payload = 200, await self.admin("probe", {})
             elif method == "POST" and path == "/admin/provision" and self.admin:
                 status, payload = 200, await self.admin("provision", json.loads(body or b"{}"))
+            elif method == "GET" and path == "/admin/overview" and self.admin:
+                status, payload = 200, await self.admin("overview", {})
+            elif method == "POST" and path == "/admin/notify_test" and self.admin:
+                status, payload = 200, await self.admin("notify_test", json.loads(body or b"{}"))
             elif method == "POST" and path == "/admin/type_session" and self.admin:
                 status, payload = 200, await self.admin("type_session", json.loads(body or b"{}"))
             elif method == "GET" and path == "/admin/terminals":
@@ -80,6 +85,12 @@ class HookServer:
         term = d.get("_terminal") or {}
         if sid and term.get("app"):
             self.terminals[sid] = {"app": term.get("app"), "tty": term.get("tty", ""), "project": project, "at": time.time()}
+            self._save_terminals()
+        if self.state is not None and sid:
+            state = {"UserPromptSubmit": "working", "SessionStart": "started", "Stop": "done", "PermissionRequest": "permission",
+                     "Notification": "needs input" if "input" in str(d.get("message", "")).lower() or "waiting" in str(d.get("message", "")).lower() else "notice"}.get(event, "")
+            if state:
+                self.state[sid] = {"state": state, "at": time.time(), "project": project}
         if event in ("UserPromptSubmit", "SessionStart"):
             return {}
         if event == "PermissionRequest":
@@ -138,6 +149,22 @@ class HookServer:
         card = self.queued.pop(0)
         self.queued.clear()                                 # keep only the newest waiting notice
         await self.broadcast(card)
+
+    _TERMS = Path.home() / ".config" / "aitl" / "terminals.json"
+
+    def _load_terminals(self) -> dict[str, dict[str, Any]]:
+        try:
+            data = json.loads(self._TERMS.read_text()) if self._TERMS.exists() else {}
+            cutoff = time.time() - 7 * 86400
+            return {k: v for k, v in data.items() if float(v.get("at", 0)) > cutoff}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _save_terminals(self) -> None:
+        try:
+            self._TERMS.write_text(json.dumps(self.terminals))
+        except Exception:  # noqa: BLE001
+            pass
 
     def reply(self, alert_id: str, action: str) -> bool:
         fut = self.pending.get(alert_id)

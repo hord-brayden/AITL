@@ -12,7 +12,7 @@ final class Supervisor {
     static let configURL = configDir.appendingPathComponent("config.toml")
     static let adminBase = "http://127.0.0.1:7778"
 
-    private(set) var status = Status()
+    var status = Status()
     private var process: Process?
     private var wantRunning = false
     private var restartDelay: TimeInterval = 2

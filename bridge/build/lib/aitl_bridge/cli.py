@@ -56,7 +56,12 @@ async def _serve(args) -> None:
     from .hooks import HookServer, status as hooks_status
     shared.hooks = HookServer(shared.broadcast)
     shared.hooks.admin = shared.admin
+    shared.hooks.state = shared.session_state
     tasks.append(asyncio.create_task(shared.now_playing_loop()))
+    tasks.append(asyncio.create_task(shared.notification_loop()))
+    from .notifications import accessible as _nc_ok
+    ok, why = _nc_ok()
+    print(f"  notifications: {'relaying macOS notifications to the device' if ok else 'off: ' + why}")
     tasks.append(asyncio.create_task(shared.hooks.run()))
     print(f"  claude code hooks: {hooks_status()} (relay on 127.0.0.1:7778)")
     if not tasks:
@@ -261,6 +266,12 @@ def cmd_status(args) -> None:
         print("  no device linked")
 
 
+def cmd_notify(args) -> None:
+    from .hooks import admin_request
+    res = admin_request("/admin/notify_test", {"title": args.title, "text": args.text})
+    print("sent" if res.get("ok") else f"failed: {res.get('error')}")
+
+
 def cmd_hook(args) -> None:
     from .hooks import hook_client
     sys.exit(hook_client(args.event))
@@ -385,6 +396,10 @@ def main(argv: list[str] | None = None) -> None:
     au = sub.add_parser("autostart", help="start the bridge at login (macOS LaunchAgent) and keep it alive")
     au.add_argument("action", choices=["on", "off", "status"]); au.set_defaults(fn=cmd_autostart)
     lg = sub.add_parser("logs", help="show the background bridge log"); lg.add_argument("-f", "--follow", action="store_true"); lg.add_argument("-n", "--lines", type=int, default=40); lg.set_defaults(fn=cmd_logs)
+
+    nt = sub.add_parser("notify", help="push a test notification card to the device")
+    nt.add_argument("title", nargs="?", default="Test notification"); nt.add_argument("text", nargs="?", default="If you can read this, the relay path works.")
+    nt.set_defaults(fn=cmd_notify)
 
     hk = sub.add_parser("hook", help="(internal) relay a Claude Code hook event to the running bridge")
     hk.add_argument("event")

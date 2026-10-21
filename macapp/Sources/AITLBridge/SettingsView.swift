@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var password = ""
     @State private var provisionResult = ""
     @State private var selectedModel = ""
+    @State private var hostChoice = "mdns"
+    @State private var customHost = ""
+    @State private var notifyResult = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -29,6 +32,7 @@ struct SettingsView: View {
                         section("Touch") { touchPanel }
                         section("Dictation") { dictationPanel }
                         section("Bluetooth & keystrokes") { blePanel }
+                        section("Notifications → device") { notificationsPanel }
                         section("Storage & maintenance") { maintenancePanel }
                     }
                 }
@@ -113,16 +117,56 @@ struct SettingsView: View {
                 TextField("Network name (2.4 GHz)", text: $ssid).textFieldStyle(.roundedBorder).frame(width: 220)
                 SecureField("Password", text: $password).textFieldStyle(.roundedBorder).frame(width: 200)
                 Button("Send Wi-Fi + bridge pairing over USB") {
-                    model.provision(ssid: ssid, password: password, bridge: true) { provisionResult = $0; password = "" }
+                    model.provision(ssid: ssid, password: password, bridge: true, host: chosenHost) { provisionResult = $0; password = "" }
                 }.disabled(ssid.isEmpty || model.busy)
             }
             HStack {
-                Button("Re-pair bridge only (new address / token)") { model.provision(ssid: nil, password: nil, bridge: true) { provisionResult = $0 } }.disabled(model.busy)
+                Picker("Device reaches this Mac at", selection: $hostChoice) {
+                    Text("aitl-bridge.local (mDNS, auto)").tag("mdns")
+                    if let lan = hosts["lan"], !lan.isEmpty { Text("LAN IP \(lan)").tag("lan") }
+                    if let ts = hosts["tailscale"], !ts.isEmpty { Text("Tailscale \(ts)").tag("tailscale") }
+                    Text("Custom…").tag("custom")
+                }.frame(width: 360)
+                if hostChoice == "custom" { TextField("host or IP", text: $customHost).textFieldStyle(.roundedBorder).frame(width: 180) }
+            }
+            HStack {
+                Button("Re-pair bridge only (new address / token)") { model.provision(ssid: nil, password: nil, bridge: true, host: chosenHost) { provisionResult = $0 } }.disabled(model.busy)
                 Text("Current: \(model.str("wifiSsid").isEmpty ? "none" : model.str("wifiSsid"))  →  \(model.str("bridgeHost")):\(model.int("bridgePort"))  (\(model.int("wifiMode") == 1 ? "TLS" : "signed frames"))")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !provisionResult.isEmpty { Text(provisionResult).font(.caption) }
-            Text("The device must be on the same network as this Mac. Provisioning only works over the USB cable (possession is the credential). Frames on Wi-Fi are HMAC-signed with a per-session nonce; the password and token never travel over the air.")
+            Text("The device must be able to reach this Mac: same network for mDNS/LAN IP. The Tailscale address only works if the device's network routes into your tailnet (a Tailscale subnet router on that LAN); the ESP32 cannot join a tailnet itself. Provisioning only goes over the USB cable. Wi-Fi frames are HMAC-signed with a per-session nonce; the password and token never travel over the air.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var hosts: [String: String] { (model.bridgeInfo["hosts"] as? [String: String]) ?? [:] }
+    private var chosenHost: String? {
+        switch hostChoice { case "lan": return hosts["lan"]; case "tailscale": return hosts["tailscale"]; case "custom": return customHost.isEmpty ? nil : customHost; default: return nil }
+    }
+
+    private var notificationsPanel: some View {
+        let nc = (model.bridgeInfo["notifications"] as? [String: Any]) ?? [:]
+        let accessible = nc["accessible"] as? Bool ?? false
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: accessible ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(accessible ? .green : .orange)
+                Text(accessible ? "Relaying macOS notifications (Zoom, Slack, Mail, …) to the device inbox." : "Needs Full Disk Access for AITL Bridge to read the Notification Center store.")
+                if !accessible {
+                    Button("Grant Full Disk Access…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+                    }.buttonStyle(.borderedProminent).controlSize(.small)
+                }
+            }
+            HStack {
+                Button("Send test notification to device") {
+                    Supervisor.post("/admin/notify_test", body: ["title": "AITL Bridge", "text": "Notification relay test from the Mac app"]) { _ in DispatchQueue.main.async { notifyResult = "sent" } }
+                }
+                Text(notifyResult).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Filter apps in ~/.config/aitl/config.toml under [notifications] (apps = allow-list of bundle ids, ignore = deny-list). Notifications land in the device inbox with a toast; Claude Code permission prompts stay modal.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Back buttons: BOOT tap = dictate, double-tap = next chat, hold = talk (device mic). The other button is the hardware RESET and cannot be remapped.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

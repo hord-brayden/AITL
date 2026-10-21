@@ -10,8 +10,11 @@ namespace app {
   struct CcSession { String id, title, project, age; };
   struct Alert { String id, kind, title, text, project, session; bool twoWay; };
   struct Msg { uint8_t role; String text; };   // role: 0 user, 1 assistant, 2 error
+  struct OvChat { String id, title, model, age, session, state; uint16_t turns; uint32_t tok; float cost; };
+  struct OvSession { String id, title, project, age, state, app; bool live; };
+  struct Overview { uint32_t turns = 0, tin = 0, tout = 0; float cost = 0; uint8_t devices = 0; std::vector<OvChat> chats; std::vector<OvSession> sessions; bool valid = false; };
   struct NowPlaying { String app, state, title, artist; bool playing() const { return state == "playing"; } };
-  enum class Ev : uint8_t { Transcript, Lists, Status, Link, Toast, Error, Pairing, Provisioned, Alert, AlertClear, NowPlaying, Inbox };
+  enum class Ev : uint8_t { Transcript, Lists, Status, Link, Toast, Error, Pairing, Provisioned, Alert, AlertClear, NowPlaying, Inbox, Overview };
   typedef void (*UiCb)(Ev ev, const char* arg);
 
   extern std::vector<Model>  models;
@@ -22,6 +25,8 @@ namespace app {
   extern std::vector<Alert> inbox;  // recent cards, newest first (max 20)
   extern uint8_t inboxUnread;
   extern NowPlaying np;
+  extern Overview ov;
+  extern String lastUsage;   // "1.2k tok • $0.004 • 3.1s" of the last reply
   extern String currentModel, currentChatId, currentChatTitle, currentChatSession, bridgeName, bridgeVersion, frontApp;
   extern bool currentChatLive;   // the bound Claude Code session has a known terminal window
   extern bool dictating, streaming, hasReply, capturing;   // capturing = device mic is recording
@@ -44,6 +49,8 @@ namespace app {
   void runAction(const String& id);
   void refreshLists();
   void listSessions();              // ask the bridge for recent Claude Code sessions
+  void requestOverview();
+  void nextChat();                  // cycle through recent chats (BOOT double-tap)
   void openSession(const String& id);
   void replyAlert(const char* action);  // "allow" | "deny" | "dismiss"
   void inboxMarkRead();

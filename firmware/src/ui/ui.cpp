@@ -289,10 +289,13 @@ static void homeRefreshTranscript(bool deltaOnly) {
   } else {
     lv_obj_clean(s_msgList); s_lastMsgLabels = 0; for (auto& m : msgs) s_lastMsgLabels = addMsgLabels(m); s_msgCount = msgs.size();
   }
+  if (app::lastUsage.length() && !app::streaming) {
+    lv_obj_t* u = makeLabel(s_msgList, app::lastUsage.c_str(), &mono); lv_obj_set_style_text_color(u, lv_color_hex(CO_MUTE), 0); lv_obj_set_style_pad_top(u, 2, 0);
+  }
   scrollToEnd();
 }
 static void evModels(lv_event_t*) { showModels(); }
-static void evChats(lv_event_t*) { showChats(); }
+static void evChats(lv_event_t*) { showOverview(); }
 static void evDict(lv_event_t*) { app::dictation("toggle"); }
 static void evType(lv_event_t*) { showCompose(0); }
 static void evActions(lv_event_t*) { showActions(); }
@@ -502,6 +505,7 @@ void onAppEvent(app::Ev ev, const char* arg) {
     case app::Ev::Alert: showAlert(); break;
     case app::Ev::AlertClear: hideAlert(); break;
     case app::Ev::NowPlaying: if (onHome) homeRefreshNp(); break;
+    case app::Ev::Overview: listsUpdated(); break;
     case app::Ev::Inbox: if (onHome) homeRefreshBell(); break;
     case app::Ev::Provisioned: toast(!strcmp(arg, "wifi") ? "Wi-Fi provisioned from bridge" : "Bridge credentials installed"); break;
   }

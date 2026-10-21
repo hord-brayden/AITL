@@ -22,6 +22,8 @@ class AnthropicProvider(Provider):
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self._client = None
+        self.last_usage: dict | None = None
+        self.last_cost: float | None = None
 
     def _key(self) -> str | None:
         return secrets.get("anthropic")
@@ -76,6 +78,8 @@ class AnthropicProvider(Provider):
                     async for text in s.text_stream:
                         yield text
                     final = await s.get_final_message()
+            if getattr(final, "usage", None):
+                self.last_usage = {"input_tokens": final.usage.input_tokens, "output_tokens": final.usage.output_tokens}
             if final.stop_reason == "refusal":
                 detail = getattr(getattr(final, "stop_details", None), "category", None)
                 yield f"\n[declined{': ' + detail if detail else ''}]"

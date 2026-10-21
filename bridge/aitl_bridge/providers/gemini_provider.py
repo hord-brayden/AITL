@@ -13,6 +13,8 @@ class GeminiProvider(Provider):
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self._client = None
+        self.last_usage: dict | None = None
+        self.last_cost: float | None = None
 
     def available(self) -> bool:
         return bool(secrets.get("gemini"))
@@ -56,5 +58,8 @@ class GeminiProvider(Provider):
             async for chunk in await client.aio.models.generate_content_stream(model=model_id, contents=contents, config=cfg):
                 if chunk.text:
                     yield chunk.text
+                um = getattr(chunk, "usage_metadata", None)
+                if um:
+                    self.last_usage = {"input_tokens": int(getattr(um, "prompt_token_count", 0) or 0), "output_tokens": int(getattr(um, "candidates_token_count", 0) or 0)}
         except Exception as e:  # google-genai raises several error classes; surface the message
             raise ProviderError(f"Gemini: {str(e)[:160]}") from e

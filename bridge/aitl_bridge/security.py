@@ -168,3 +168,16 @@ class RateLimiter:
             return False
         self.state[key] = (tokens - 1, now)
         return True
+
+
+def tailscale_ip() -> str:
+    """This Mac's Tailscale IPv4, if Tailscale is installed and up (for devices that can route into the tailnet)."""
+    import subprocess
+    for exe in ("/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        try:
+            out = subprocess.run([exe, "ip", "-4"], capture_output=True, text=True, timeout=3).stdout.strip().splitlines()
+            if out and out[0].startswith("100."):
+                return out[0]
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return ""

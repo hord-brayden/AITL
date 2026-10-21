@@ -7,6 +7,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from . import __version__, config, mac, protocol, audio, stt
+import secrets
 from .chat_store import ChatStore, Chat
 from .providers import ProviderError
 from .router import Router
@@ -42,9 +43,74 @@ class Shared:
         self.dict_state: dict[str, Any] = {"dictating": False}
         self.hid_notified = False
         self.device_settings: dict[str, dict[str, Any]] = {}
+        self.session_state: dict[str, dict[str, Any]] = {}     # Claude Code session id -> {state, at, project, note}
+        self.usage_today: dict[str, Any] = {"day": time.strftime("%Y-%m-%d"), "turns": 0, "in": 0, "out": 0, "cost": 0.0}
         self.sessions: set["DeviceSession"] = set()
         self.hooks = None          # HookServer, attached by the CLI when serving
         self.pending_settings: dict[str, asyncio.Future] = {}
+
+    def note_usage(self, usage: dict[str, Any] | None, cost: float | None) -> dict[str, Any]:
+        day = time.strftime("%Y-%m-%d")
+        if self.usage_today.get("day") != day:
+            self.usage_today = {"day": day, "turns": 0, "in": 0, "out": 0, "cost": 0.0}
+        u = {"in": int((usage or {}).get("input_tokens") or (usage or {}).get("in") or 0), "out": int((usage or {}).get("output_tokens") or (usage or {}).get("out") or 0), "cost": float(cost or 0)}
+        self.usage_today["turns"] += 1; self.usage_today["in"] += u["in"]; self.usage_today["out"] += u["out"]; self.usage_today["cost"] += u["cost"]
+        return u
+
+    def overview(self) -> dict[str, Any]:
+        """One frame for the device's overview screen: today's usage, formalized chats, live sessions."""
+        from . import claude_sessions
+        now = time.time()
+        def age(ts: float) -> str:
+            d = max(0, now - ts)
+            return f"{int(d // 60)}m" if d < 3600 else f"{int(d // 3600)}h" if d < 86400 else f"{int(d // 86400)}d"
+        chats = []
+        for c in self.chats.list(12):
+            ch = self.chats.get(c["id"])
+            if not ch:
+                continue
+            st = ch.ext.get("stats") or {}
+            sid = ch.ext.get("claude_code_session", "")
+            state = self.session_state.get(sid, {}).get("state", "") if sid else ""
+            chats.append({"id": ch.id, "title": (ch.title or "(untitled)")[:36], "model": ch.model.split("/")[-1][:18], "turns": len([m for m in ch.messages if m["role"] == "user"]),
+                          "tok": int(st.get("in", 0)) + int(st.get("out", 0)), "cost": round(float(st.get("cost", 0.0)), 3), "age": age(ch.updated),
+                          "session": sid[:8], "state": state})
+        sessions = []
+        for info in claude_sessions.list_sessions(limit=8):
+            st = self.session_state.get(info.id, {})
+            term = self.hooks.terminals.get(info.id, {}) if self.hooks else {}
+            sessions.append({"id": info.id, "title": info.title[:36], "project": info.project[:18], "age": info.age(),
+                             "state": st.get("state", ""), "live": bool(term), "app": term.get("app", "")})
+        u = self.usage_today
+        return {"t": "overview", "today": {"turns": u["turns"], "in": u["in"], "out": u["out"], "cost": round(u["cost"], 3)},
+                "chats": chats, "sessions": sessions, "devices": len({x.device_id for x in self.sessions if x.device_id})}
+
+    async def notification_loop(self) -> None:
+        from . import notifications
+        cfg = self.cfg.get("notifications", {})
+        if not cfg.get("enabled", True):
+            return
+        ok, why = notifications.accessible()
+        if not ok:
+            log.warning("notifications: %s (relay disabled until granted)", why)
+        watcher = notifications.NotificationWatcher(cfg)
+        warned = not ok
+        while True:
+            try:
+                if self.sessions:
+                    ok, why = notifications.accessible()
+                    if ok:
+                        for n in watcher.poll():
+                            title = f"{n['app']}: {n['title']}" if n["title"] else n["app"]
+                            text = " ".join(x for x in (n["subtitle"], n["body"]) if x)[:300]
+                            card = {"t": "alert", "id": secrets.token_hex(3), "kind": "modal" if cfg.get("modal") else "notice",
+                                    "title": title[:60], "text": text or "(no text)", "project": n["time"], "session": "", "actions": ["OK"]}
+                            await self.broadcast(card)
+                    elif not warned:
+                        warned = True; log.warning("notifications: %s", why)
+            except Exception as e:  # noqa: BLE001
+                log.debug("notification loop: %s", e)
+            await asyncio.sleep(float(cfg.get("poll_seconds", 4)))
 
     async def now_playing_loop(self) -> None:
         last: dict[str, Any] = {}
@@ -73,7 +139,12 @@ class Shared:
                 await asyncio.wait_for(fut, 5)
             except asyncio.TimeoutError:
                 return {"ok": False, "error": "device did not answer"}
-            return {"ok": True, "devices": self.device_settings, "models": self.router.as_wire(), "bridge": {"name": self.bridge_name, "wifi_mode": self.cfg["bridge"].get("wifi_mode", "signed"), "ws_port": self.cfg["bridge"]["ws_port"]}}
+            from .security import _local_ips, tailscale_ip, BRIDGE_DNS
+            from .notifications import accessible as nc_ok
+            return {"ok": True, "devices": self.device_settings, "models": self.router.as_wire(),
+                    "bridge": {"name": self.bridge_name, "wifi_mode": self.cfg["bridge"].get("wifi_mode", "signed"), "ws_port": self.cfg["bridge"]["ws_port"],
+                               "hosts": {"mdns": BRIDGE_DNS, "lan": (_local_ips() or [""])[0], "tailscale": tailscale_ip()},
+                               "notifications": {"enabled": bool(self.cfg.get("notifications", {}).get("enabled", True)), "accessible": nc_ok()[0], "why": nc_ok()[1]}}}
         if op == "provision":
             usb = [x for x in self.sessions if x.transport == "serial" and x.authenticated]
             if not usb:
@@ -95,6 +166,12 @@ class Shared:
                     self.registry.add(x.device_id or "usb-provisioned", f"AITL {x.device_id}", token, via="usb", fw=x.fw)
                 sent.append(f"bridge {host}:{self.cfg['bridge']['ws_port']} ({mode})")
             return {"ok": True, "sent": sent, "devices": [x.device_id for x in usb]}
+        if op == "overview":
+            return self.overview()
+        if op == "notify_test":
+            await self.broadcast({"t": "alert", "id": secrets.token_hex(3), "kind": "notice", "title": str(data.get("title", "Test notification"))[:60],
+                                  "text": str(data.get("text", "This came through the macOS notification relay path."))[:300], "project": time.strftime("%H:%M"), "session": "", "actions": ["OK"]})
+            return {"ok": True}
         if op == "type_session":
             for x in list(self.sessions):
                 if x.authenticated:
@@ -181,6 +258,7 @@ class DeviceSession:
             "dictation": self.on_dictation, "hid.paste_last": self.on_paste_last, "clip.set_last": self.on_clip_last,
             "media": self.on_media, "prov.ok": self.on_prov_ok,
             "cc.list": self.on_cc_list, "cc.open": self.on_cc_open, "alert.reply": self.on_alert_reply, "hid.type_session": self.on_type_session,
+            "overview": self.on_overview,
             "audio.start": self.on_audio_start, "audio.chunk": self.on_audio_chunk, "audio.stop": self.on_audio_stop,
             "audio.cancel": self.on_audio_cancel, "settings.ack": self.on_settings_ack, "settings.dump": self.on_settings_dump,
         }.get(t)
@@ -248,6 +326,7 @@ class DeviceSession:
         reply: list[str] = []
         buf = ""
         last_flush = time.monotonic()
+        t_start = time.monotonic()
         try:
             provider = self.s.router.resolve(self.model)
             system = self.s.cfg["bridge"]["system_prompt"]
@@ -268,12 +347,16 @@ class DeviceSession:
             full = "".join(reply)
             if getattr(provider, "last_session_id", None):
                 chat.ext["claude_code_session"] = provider.last_session_id
+            u = self.s.note_usage(getattr(provider, "last_usage", None), getattr(provider, "last_cost", None))
+            st = chat.ext.setdefault("stats", {"in": 0, "out": 0, "cost": 0.0, "turns": 0, "ms": 0})
+            st["in"] += u["in"]; st["out"] += u["out"]; st["cost"] = float(st.get("cost", 0)) + u["cost"]; st["turns"] = int(st.get("turns", 0)) + 1
+            st["ms"] = int(st.get("ms", 0)) + int((time.monotonic() - t_start) * 1000)
             chat.messages.append({"role": "assistant", "content": full})
             self.last_reply = full
             if not chat.title:
                 chat.title = (user_text.strip().splitlines()[0])[:40]
             self.s.chats.save(chat)
-            await self.send({"t": "chat.done", "chat": chat.id, "title": chat.title})
+            await self.send({"t": "chat.done", "chat": chat.id, "title": chat.title, "usage": {"in": u["in"], "out": u["out"], "cost": round(u["cost"], 4), "ms": int((time.monotonic() - t_start) * 1000)}})
             if type_result and full:
                 await self._hid_guard()
                 await mac.type_text(full.strip(), self.s.cfg["hid"]["typing_method"], self.s.cfg["hid"]["restore_clipboard"])
@@ -416,6 +499,9 @@ class DeviceSession:
             await self.push_now_playing(force=True)
 
     # ---------- Claude Code sessions (the `claude -r` archive) ----------
+    async def on_overview(self, m: dict[str, Any]) -> None:
+        await self.send(self.s.overview())
+
     async def on_cc_list(self, m: dict[str, Any]) -> None:
         from . import claude_sessions
         items = [i.wire() for i in claude_sessions.list_sessions(limit=int(m.get("limit", 15)))]

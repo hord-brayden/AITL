@@ -40,6 +40,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_output_tokens": 2048,
         "title_model": "",          # model used to title chats; empty = same as the chat's model
     },
+    "notifications": {"enabled": True, "apps": [], "ignore": [], "modal": False, "poll_seconds": 4},   # macOS notifications -> device inbox (needs Full Disk Access)
+    "buttons": {"boot_short": "dictate", "boot_double": "next_chat", "boot_long": "talk"},
     "stt": {"engine": "auto", "whisper_model": "mlx-community/whisper-base-mlx", "gemini_model": "gemini-flash-latest", "language": "en"},
     "hid": {
         "typing_method": "paste",   # "paste" (clipboard + Cmd-V, Unicode-safe) | "keystroke"

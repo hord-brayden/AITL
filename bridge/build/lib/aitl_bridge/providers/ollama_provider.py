@@ -18,6 +18,8 @@ class OllamaProvider(Provider):
         self.cfg = cfg
         self.base = (cfg.get("base_url") or "http://127.0.0.1:11434").rstrip("/")
         self._reachable: bool | None = None
+        self.last_usage: dict | None = None
+        self.last_cost: float | None = 0.0
 
     def available(self) -> bool:
         return self._reachable is not False
@@ -59,6 +61,7 @@ class OllamaProvider(Provider):
                         if piece:
                             yield piece
                         if obj.get("done"):
+                            self.last_usage = {"input_tokens": int(obj.get("prompt_eval_count") or 0), "output_tokens": int(obj.get("eval_count") or 0)}
                             break
         except httpx.HTTPError as e:
             raise ProviderError(f"Ollama unreachable at {self.base} (is `ollama serve` running?)") from e

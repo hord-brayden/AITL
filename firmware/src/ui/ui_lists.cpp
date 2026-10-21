@@ -33,6 +33,7 @@ static lv_obj_t* scrollList(lv_obj_t* scr) {
 // ---------- models ----------
 static void evPickModel(lv_event_t* e) { size_t i = (size_t)(uintptr_t)lv_event_get_user_data(e); if (i < app::models.size()) { app::setModel(app::models[i].id); toast("Model set"); } showHome(); }
 static lv_obj_t* s_modelsScr = nullptr; static lv_obj_t* s_chatsScr = nullptr; static lv_timer_t* s_rerender = nullptr;
+static void renderOverview(); extern lv_obj_t* s_ovScr;
 static void renderModels();
 static void renderChats();
 void showModels() { if (app::bridgeLinked()) app::refreshLists(); renderModels(); }
@@ -212,9 +213,63 @@ static void rerenderCb(lv_timer_t* t) {
   lv_obj_t* act = lv_scr_act();
   if (act && act == s_chatsScr) renderChats();
   else if (act && act == s_modelsScr) renderModels();
+  else if (act && act == s_ovScr) renderOverview();
 }
 void listsUpdated() {   // coalesce the burst of list replies into one redraw
   if (s_rerender) lv_timer_reset(s_rerender);
   else { s_rerender = lv_timer_create(rerenderCb, 250, nullptr); lv_timer_set_repeat_count(s_rerender, 1); }
 }
+}
+
+// ---------- overview: today's usage, formalized chats, live Claude Code sessions ----------
+namespace ui {
+lv_obj_t* s_ovScr = nullptr;
+static void evOvChat(lv_event_t* e) { size_t i = (size_t)(uintptr_t)lv_event_get_user_data(e); if (i < app::ov.chats.size()) { app::openChat(app::ov.chats[i].id); showHome(); } }
+static void evOvSession(lv_event_t* e) { size_t i = (size_t)(uintptr_t)lv_event_get_user_data(e); if (i < app::ov.sessions.size()) { app::openSession(app::ov.sessions[i].id); toast("Resuming session..."); showHome(); } }
+static void evOvAll(lv_event_t*) { showChats(); }
+static void evOvNew(lv_event_t*) { app::newChat(); showHome(); }
+static lv_obj_t* stat(lv_obj_t* parent, const char* value, const char* label) {
+  lv_obj_t* c = lv_obj_create(parent); lv_obj_remove_style_all(c); lv_obj_add_style(c, &panel, 0); lv_obj_set_flex_grow(c, 1); lv_obj_set_height(c, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN); lv_obj_set_style_pad_row(c, 0, 0); lv_obj_set_style_pad_all(c, big() ? 8 : 5, 0); lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* v = makeLabel(c, value, &body); lv_obj_set_style_text_font(v, big() ? &lv_font_montserrat_20 : &lv_font_montserrat_16, 0); lv_obj_set_style_text_color(v, lv_color_hex(CO_CAERULEI2), 0);
+  makeLabel(c, label, &mono);
+  return c;
+}
+static const char* stateIcon(const String& st) { return st == "permission" ? LV_SYMBOL_WARNING : st == "needs input" ? LV_SYMBOL_EDIT : st == "working" ? LV_SYMBOL_REFRESH : st == "done" ? LV_SYMBOL_OK : ""; }
+static uint32_t stateColor(const String& st) { return st == "permission" ? CO_AMBER : st == "needs input" ? CO_AMBER : st == "working" ? CO_CAERULEI : st == "done" ? CO_PHOSPHOR : CO_MUTE; }
+static void renderOverview() {
+  lv_obj_t* scr = newScreen(); s_ovScr = scr; statusBar(scr, "03", "OVERVIEW", true);
+  lv_obj_t* list = scrollList(scr);
+  const app::Overview& o = app::ov;
+  // today
+  lv_obj_t* row = lv_obj_create(list); lv_obj_remove_style_all(row); lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT); lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW); lv_obj_set_style_pad_column(row, 4, 0);
+  char b1[16], b2[16], b3[16]; uint32_t tok = o.tin + o.tout;
+  snprintf(b1, sizeof(b1), "%lu", (unsigned long)o.turns); if (tok >= 1000) snprintf(b2, sizeof(b2), "%.1fk", tok / 1000.0f); else snprintf(b2, sizeof(b2), "%lu", (unsigned long)tok);
+  if (o.cost > 0) snprintf(b3, sizeof(b3), "$%.2f", o.cost); else snprintf(b3, sizeof(b3), "sub");
+  stat(row, b1, "TURNS TODAY"); stat(row, b2, "TOKENS"); stat(row, b3, "COST");
+  if (!o.valid) { lv_obj_t* l = makeLabel(list, app::bridgeLinked() ? "loading..." : "link a bridge", &muted); (void)l; }
+  // live sessions
+  if (!o.sessions.empty()) {
+    sectionLabel(list, "CLAUDE CODE SESSIONS");
+    for (size_t i = 0; i < o.sessions.size(); i++) {
+      const auto& x = o.sessions[i];
+      String sub = x.project + "  " + x.age + " ago"; if (x.state.length()) sub += "  " CO_BULLET "  " + x.state; if (x.live) sub += "  " CO_BULLET "  " + x.app;
+      lv_obj_t* b = listBtn(list, x.title.c_str(), sub.c_str(), false, !x.live, evOvSession, (void*)(uintptr_t)i);
+      if (x.state.length()) { lv_obj_t* ic = makeLabel(b, stateIcon(x.state), &body); lv_obj_set_style_text_color(ic, lv_color_hex(stateColor(x.state)), 0); }
+    }
+  }
+  // chats
+  sectionLabel(list, "CHATS");
+  lv_obj_t* nb = listBtn(list, LV_SYMBOL_PLUS "  New chat", "", false, false, evOvNew, nullptr); lv_obj_set_style_border_color(nb, lv_color_hex(CO_CAERULEI_D), 0);
+  for (size_t i = 0; i < o.chats.size(); i++) {
+    const auto& c = o.chats[i];
+    char meta[96]; if (c.tok >= 1000) snprintf(meta, sizeof(meta), "%s  %u turns  %.1fk tok", c.model.c_str(), c.turns, c.tok / 1000.0f); else snprintf(meta, sizeof(meta), "%s  %u turns  %lu tok", c.model.c_str(), c.turns, (unsigned long)c.tok);
+    String sub = String(meta); if (c.cost > 0) { char cb[16]; snprintf(cb, sizeof(cb), "  $%.3f", c.cost); sub += cb; } sub += "  " CO_BULLET "  " + c.age;
+    lv_obj_t* b = listBtn(list, c.title.c_str(), sub.c_str(), c.id == app::currentChatId, false, evOvChat, (void*)(uintptr_t)i);
+    if (c.state.length()) { lv_obj_t* ic = makeLabel(b, stateIcon(c.state), &body); lv_obj_set_style_text_color(ic, lv_color_hex(stateColor(c.state)), 0); }
+  }
+  lv_obj_t* all = listBtn(list, LV_SYMBOL_LIST "  All chats and sessions", "", false, false, evOvAll, nullptr); (void)all;
+  load(scr);
+}
+void showOverview() { if (app::bridgeLinked()) app::requestOverview(); renderOverview(); }
 }

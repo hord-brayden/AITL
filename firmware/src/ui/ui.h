@@ -16,6 +16,7 @@ namespace ui {
   void showSetupWizard();
   void showPairing();
   void showInbox();
+  void showOverview();
   void showTextEntry(const char* title, const char* initial, bool password, void (*onDone)(const char* text));
   void toast(const char* msg, bool error = false);
   void onAppEvent(app::Ev ev, const char* arg);

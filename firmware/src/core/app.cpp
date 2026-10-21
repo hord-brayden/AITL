@@ -12,7 +12,7 @@
 #include <mbedtls/base64.h>
 
 namespace app {
-std::vector<Model> models; std::vector<Chat> chats; std::vector<Action> actions; std::vector<CcSession> ccSessions; Alert alert; std::vector<Alert> inbox; uint8_t inboxUnread = 0; NowPlaying np;
+std::vector<Model> models; std::vector<Chat> chats; std::vector<Action> actions; std::vector<CcSession> ccSessions; Alert alert; std::vector<Alert> inbox; uint8_t inboxUnread = 0; NowPlaying np; Overview ov; String lastUsage;
 String currentModel, currentChatId, currentChatTitle, currentChatSession, bridgeName, bridgeVersion, frontApp; bool currentChatLive = false;
 bool dictating = false, streaming = false, hasReply = false, capturing = false;
 static uint32_t s_captureStart = 0;
@@ -100,6 +100,13 @@ void runAction(const String& id) {
 }
 void refreshLists() { simple("model.list"); simple("chat.list"); simple("action.list"); }
 void listSessions() { simple("cc.list"); }
+void requestOverview() { simple("overview"); }
+void nextChat() {
+  if (chats.empty()) { emit(Ev::Toast, "No chats yet"); return; }
+  size_t i = 0; for (; i < chats.size(); i++) if (chats[i].id == currentChatId) break;
+  size_t n = (i + 1) % chats.size();
+  openChat(chats[n].id); String m = "Chat: " + chats[n].title; emit(Ev::Toast, m.c_str());
+}
 void openSession(const String& id) { DynamicJsonDocument d(256); d["t"] = "cc.open"; d["id"] = id; bridge::send(d); }
 void inboxMarkRead() { inboxUnread = 0; emit(Ev::Inbox); }
 void inboxClear() { inbox.clear(); inboxUnread = 0; emit(Ev::Inbox); }
@@ -206,6 +213,9 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
   } else if (!strcmp(t, "chat.done")) {
     streaming = false; hasReply = s_lastReply.length() > 0;
     currentChatId = (const char*)(d["chat"] | currentChatId.c_str()); currentChatTitle = (const char*)(d["title"] | currentChatTitle.c_str());
+    if (d.containsKey("usage")) { JsonObject u = d["usage"]; uint32_t tok = (uint32_t)(u["in"] | 0) + (uint32_t)(u["out"] | 0); float cost = u["cost"] | 0.0f; uint32_t ms = u["ms"] | 0;
+      char b[64]; if (tok >= 1000) snprintf(b, sizeof(b), "%.1fk tok", tok / 1000.0f); else snprintf(b, sizeof(b), "%lu tok", (unsigned long)tok);
+      lastUsage = String(b); if (cost > 0) { snprintf(b, sizeof(b), "  $%.3f", cost); lastUsage += b; } snprintf(b, sizeof(b), "  %.1fs", ms / 1000.0f); lastUsage += b; }
     ledSetMode(LedMode::Done); emit(Ev::Transcript, "delta"); emit(Ev::Lists);
     if (currentChatId != String(g_settings.lastChat)) { strlcpy(g_settings.lastChat, currentChatId.c_str(), sizeof(g_settings.lastChat)); settingsSave(); }
     if (g_settings.sdLog && sdReady() && currentChatId.length()) {
@@ -302,6 +312,11 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     else ok = false;
     if (ok) { settingsSave(); String msg = String("Setting applied: ") + k; emit(Ev::Toast, msg.c_str()); }
     DynamicJsonDocument r(160); r["t"] = "settings.ack"; r["key"] = k; r["ok"] = ok; bridge::sendVia(from, r);
+  } else if (!strcmp(t, "overview")) {
+    ov.valid = true; JsonObject td = d["today"]; ov.turns = td["turns"] | 0; ov.tin = td["in"] | 0; ov.tout = td["out"] | 0; ov.cost = td["cost"] | 0.0f; ov.devices = d["devices"] | 0;
+    ov.chats.clear(); for (JsonObject c : d["chats"].as<JsonArray>()) ov.chats.push_back({(const char*)(c["id"] | ""), (const char*)(c["title"] | ""), (const char*)(c["model"] | ""), (const char*)(c["age"] | ""), (const char*)(c["session"] | ""), (const char*)(c["state"] | ""), (uint16_t)(c["turns"] | 0), (uint32_t)(c["tok"] | 0), (float)(c["cost"] | 0.0f)});
+    ov.sessions.clear(); for (JsonObject x : d["sessions"].as<JsonArray>()) ov.sessions.push_back({(const char*)(x["id"] | ""), (const char*)(x["title"] | ""), (const char*)(x["project"] | ""), (const char*)(x["age"] | ""), (const char*)(x["state"] | ""), (const char*)(x["app"] | ""), (bool)(x["live"] | false)});
+    emit(Ev::Overview);
   } else if (!strcmp(t, "np")) {
     np.app = (const char*)(d["app"] | ""); np.state = (const char*)(d["state"] | ""); np.title = (const char*)(d["title"] | ""); np.artist = (const char*)(d["artist"] | "");
     emit(Ev::NowPlaying);
@@ -310,8 +325,13 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
   } else if (!strcmp(t, "alert")) {
     alert.id = (const char*)(d["id"] | ""); alert.kind = (const char*)(d["kind"] | "notify"); alert.title = (const char*)(d["title"] | "");
     alert.text = (const char*)(d["text"] | ""); alert.project = (const char*)(d["project"] | ""); alert.session = (const char*)(d["session"] | ""); alert.twoWay = alert.kind == "permission";
-    inbox.insert(inbox.begin(), alert); if (inbox.size() > 20) inbox.pop_back(); if (inboxUnread < 99) inboxUnread++;
-    ledSetMode(alert.twoWay ? LedMode::Alert : LedMode::Done); if (!displayIsAwake()) displayWake(); emit(Ev::Alert); emit(Ev::Inbox);
+    inbox.insert(inbox.begin(), alert); if (inbox.size() > 30) inbox.pop_back(); if (inboxUnread < 99) inboxUnread++;
+    if (alert.kind == "notice") {   // macOS notification: inbox + toast, never a modal card
+      String m = alert.title; if (alert.text.length()) { m += ": "; m += alert.text.substring(0, 90); }
+      alert = Alert(); emit(Ev::Inbox); emit(Ev::Toast, m.c_str()); ledSetMode(LedMode::Done); if (!displayIsAwake()) displayWake();
+    } else {
+      ledSetMode(alert.twoWay ? LedMode::Alert : LedMode::Done); if (!displayIsAwake()) displayWake(); emit(Ev::Alert); emit(Ev::Inbox);
+    }
   } else if (!strcmp(t, "alert.clear")) {
     if (alert.id == String((const char*)(d["id"] | ""))) { alert = Alert(); if (!streaming) ledSetMode(LedMode::Idle); emit(Ev::AlertClear); }
   } else if (!strcmp(t, "pong")) { /* alive */
@@ -357,15 +377,19 @@ void tick() {
     if ((mic::heardSpeech() && mic::silenceMs() > 1600 && dur > 1500) || dur > 90000) captureStop(false);   // VAD auto-stop
     else if (!mic::heardSpeech() && dur > 8000) captureStop(true);                                           // nothing said
   }
-  // BOOT button = physical push-to-talk. Host dictation: tap toggles. Device mic: tap toggles, hold = talk while held.
-  static bool wasDown = false; static uint32_t downAt = 0; static bool holdCapture = false;
+  // BOOT button (the other back button is RESET, hardware only): tap = dictate, double-tap = next chat, hold = talk (device mic).
+  static bool wasDown = false; static uint32_t downAt = 0, lastTapAt = 0; static bool holdCapture = false, pendingTap = false;
   bool down = digitalRead(PIN_BTN_BOOT) == LOW;
   if (down && !wasDown) { downAt = now; holdCapture = false; }
   if (down && wasDown && !holdCapture && g_settings.dictSource == 1 && !capturing && now - downAt > 350) { holdCapture = true; captureStart(); }
   if (!down && wasDown) {
     if (holdCapture) captureStop(false);
-    else if (now - downAt > 40 && now - downAt < 1500) dictation("toggle");
+    else if (now - downAt > 40 && now - downAt < 1500) {
+      if (pendingTap && now - lastTapAt < 450) { pendingTap = false; nextChat(); }
+      else { pendingTap = true; lastTapAt = now; }
+    }
   }
+  if (pendingTap && now - lastTapAt >= 450) { pendingTap = false; dictation("toggle"); }
   wasDown = down;
   if (blehid::pendingChars() == 0 && !streaming && !dictating) { /* LED settles via Done/Error timeouts */ }
 }

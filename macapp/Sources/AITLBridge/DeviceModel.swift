@@ -51,8 +51,9 @@ final class DeviceModel: ObservableObject {
         }
     }
 
-    func provision(ssid: String?, password: String?, bridge: Bool, completion: @escaping (String) -> Void) {
+    func provision(ssid: String?, password: String?, bridge: Bool, host: String? = nil, completion: @escaping (String) -> Void) {
         var body: [String: Any] = ["bridge": bridge]
+        if let host, !host.isEmpty { body["host"] = host }
         if let ssid, !ssid.isEmpty { body["ssid"] = ssid; body["password"] = password ?? "" }
         busy = true
         Supervisor.post("/admin/provision", body: body) { data in
