@@ -128,6 +128,11 @@ static void composeSend(int target) {
 }
 static void evSendAI(lv_event_t*) { composeSend(0); }
 static void evSendMac(lv_event_t*) { composeSend(1); }
+static void evSendTerm(lv_event_t*) {
+  const char* txt = lv_textarea_get_text(s_ta);
+  if (!txt || !*txt) { toast("Type the prompt first", true); return; }
+  app::typeToSession(String(txt), true); toast("Typing into that session's terminal..."); showHome();
+}
 static void evKb(lv_event_t* e) {
   lv_event_code_t c = lv_event_get_code(e);
   if (c == LV_EVENT_READY) composeSend(s_target);
@@ -142,13 +147,18 @@ void showCompose(int target) {
   lv_obj_t* x = makeButton(top, LV_SYMBOL_CLOSE); lv_obj_set_size(x, big() ? 51 : 34, chipH() + 4); lv_obj_set_style_pad_all(x, 0, 0); lv_obj_add_event_cb(x, [](lv_event_t*) { showHome(); }, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* ttl = makeLabel(top, target == 0 ? "05 // ASK" : "05 // TYPE TO MAC", &mono); lv_obj_set_flex_grow(ttl, 1); lv_obj_set_style_pad_left(ttl, 4, 0);
   lv_obj_t* d = makeButton(top, LV_SYMBOL_AUDIO); lv_obj_set_size(d, big() ? 51 : 34, chipH() + 4); lv_obj_set_style_pad_all(d, 0, 0); lv_obj_add_event_cb(d, evDictInto, LV_EVENT_CLICKED, nullptr);
+  if (app::currentChatSession.length()) {   // this chat is a Claude Code session: offer to type straight into its terminal window
+    lv_obj_t* tm = makeButton(top, LV_SYMBOL_EDIT " TERM " LV_SYMBOL_RIGHT, false); lv_obj_set_size(tm, big() ? 120 : 84, chipH() + 4); lv_obj_set_style_pad_all(tm, 0, 0);
+    lv_obj_set_style_text_color(tm, lv_color_hex(app::currentChatLive ? CO_PHOSPHOR : CO_MUTE), 0);
+    lv_obj_add_event_cb(tm, evSendTerm, LV_EVENT_CLICKED, nullptr);
+  }
   lv_obj_t* ai = makeButton(top, "AI " LV_SYMBOL_RIGHT, target == 0); lv_obj_set_size(ai, big() ? 78 : 52, chipH() + 4); lv_obj_set_style_pad_all(ai, 0, 0); lv_obj_add_event_cb(ai, evSendAI, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* mac = makeButton(top, "MAC " LV_SYMBOL_RIGHT, target == 1); lv_obj_set_size(mac, big() ? 87 : 58, chipH() + 4); lv_obj_set_style_pad_all(mac, 0, 0); lv_obj_add_event_cb(mac, evSendMac, LV_EVENT_CLICKED, nullptr);
   s_ta = lv_textarea_create(scr); lv_obj_set_width(s_ta, LV_PCT(100)); lv_obj_set_flex_grow(s_ta, 1);
   lv_obj_set_style_bg_color(s_ta, lv_color_hex(CO_MIDNIGHT), 0); lv_obj_set_style_text_color(s_ta, lv_color_hex(CO_BONE), 0);
   lv_obj_set_style_border_color(s_ta, lv_color_hex(CO_CAERULEI_D), 0); lv_obj_set_style_text_font(s_ta, fontBody(), 0);
   lv_obj_set_style_pad_all(s_ta, 4, 0);
-  lv_textarea_set_placeholder_text(s_ta, target == 0 ? "Ask anything..." : "Text to type into the Mac...");
+  lv_textarea_set_placeholder_text(s_ta, target == 0 ? (app::currentChatSession.length() ? "AI = continue this session on the device   TERM = type into its terminal window" : "Ask anything...") : "Text to type into the Mac...");
   lv_obj_set_style_text_color(s_ta, lv_color_hex(CO_MUTE), LV_PART_TEXTAREA_PLACEHOLDER);
   s_kb = lv_keyboard_create(scr); lv_obj_set_size(s_kb, LV_PCT(100), (lv_coord_t)(displayH() * 0.52f));
   lv_keyboard_set_textarea(s_kb, s_ta); lv_keyboard_set_mode(s_kb, LV_KEYBOARD_MODE_TEXT_LOWER);

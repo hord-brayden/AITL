@@ -1,4 +1,5 @@
 import SwiftUI
+import ApplicationServices
 
 /// The management window: everything on the device's Setup screen, plus Wi-Fi provisioning and model choice.
 struct SettingsView: View {
@@ -62,7 +63,14 @@ struct SettingsView: View {
                 statusRow("microSD", model.str("sd"), .secondary)
             }
             if let ok = supervisor.status.macControl {
-                statusRow("Mac control", ok ? "allowed" : "blocked", ok ? .green : .red)
+                statusRow("Mac control", ok ? "allowed" : "blocked: grant Accessibility", ok ? .green : .red)
+                if !ok {
+                    Button("Grant Accessibility…") {
+                        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                        _ = AXIsProcessTrustedWithOptions(opts)
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+                    }.buttonStyle(.borderedProminent).controlSize(.small)
+                }
             }
             Spacer()
             if !model.lastMessage.isEmpty { Text(model.lastMessage).font(.caption).foregroundStyle(.secondary) }

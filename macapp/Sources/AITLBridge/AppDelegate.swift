@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ServiceManagement
 import UserNotifications
+import ApplicationServices
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -22,6 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         supervisor.start()
         buildMainMenu()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.openWindow() }
+        // Ask macOS for Accessibility (typing, dictation, key presses) with the system prompt if not yet granted.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            if !AXIsProcessTrustedWithOptions(opts) { self.supervisor.status.macControl = false }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.supervisor.refresh() }
     }
 
@@ -140,6 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openLog() { NSWorkspace.shared.open(Supervisor.logURL) }
     @objc private func openConfig() { NSWorkspace.shared.open(Supervisor.configURL) }
     @objc private func openAccessibility() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
     }
     @objc private func toggleLogin() {

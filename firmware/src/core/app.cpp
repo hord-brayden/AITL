@@ -13,7 +13,7 @@
 
 namespace app {
 std::vector<Model> models; std::vector<Chat> chats; std::vector<Action> actions; std::vector<CcSession> ccSessions; Alert alert; std::vector<Alert> inbox; uint8_t inboxUnread = 0; NowPlaying np;
-String currentModel, currentChatId, currentChatTitle, bridgeName, bridgeVersion, frontApp;
+String currentModel, currentChatId, currentChatTitle, currentChatSession, bridgeName, bridgeVersion, frontApp; bool currentChatLive = false;
 bool dictating = false, streaming = false, hasReply = false, capturing = false;
 static uint32_t s_captureStart = 0;
 String pairFingerprint, pairCode, pairName;
@@ -84,7 +84,7 @@ void sendPrompt(const String& text) {
   bridge::send(d);
 }
 void stopGeneration() { if (streaming) simple("chat.stop"); }
-void newChat() { currentChatId = ""; currentChatTitle = ""; g_settings.lastChat[0] = 0; settingsSave(); clearTranscript(); simple("chat.new"); emit(Ev::Lists); }
+void newChat() { currentChatId = ""; currentChatTitle = ""; currentChatSession = ""; currentChatLive = false; g_settings.lastChat[0] = 0; settingsSave(); clearTranscript(); simple("chat.new"); emit(Ev::Lists); }
 void openChat(const String& id) { DynamicJsonDocument d(256); d["t"] = "chat.open"; d["chat"] = id; bridge::send(d); }
 void deleteChat(const String& id) { DynamicJsonDocument d(256); d["t"] = "chat.delete"; d["chat"] = id; bridge::send(d); if (id == currentChatId) { currentChatId = ""; currentChatTitle = ""; clearTranscript(); } }
 void setModel(const String& id) {
@@ -116,6 +116,11 @@ void typeToMac(const String& text) {
   }
   if (!bridge::connected()) { emit(Ev::Error, "No bridge linked."); return; }
   DynamicJsonDocument d(LINK_MAX_MSG); d["t"] = "hid.type"; d["text"] = text; bridge::send(d); ledSetMode(LedMode::Typing);
+}
+void typeToSession(const String& text, bool enter) {
+  if (!bridge::connected()) { emit(Ev::Error, "No bridge linked."); return; }
+  if (!currentChatSession.length()) { emit(Ev::Error, "This chat is not a Claude Code session."); return; }
+  DynamicJsonDocument d(LINK_MAX_MSG); d["t"] = "hid.type_session"; d["session"] = currentChatSession; d["text"] = text; d["enter"] = enter; bridge::send(d); ledSetMode(LedMode::Typing);
 }
 void keyToMac(const char* combo) {
   if (g_settings.hidTarget == 1) { if (blehid::connected()) blehid::combo(combo); else emit(Ev::Error, "BLE keyboard not connected."); return; }
@@ -209,7 +214,7 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
   } else if (!strcmp(t, "chat.error")) {
     streaming = false; ledSetMode(LedMode::Error); pushMsg(2, (const char*)(d["msg"] | "error")); emit(Ev::Transcript, "reset"); emit(Ev::Error, d["msg"] | "error");
   } else if (!strcmp(t, "chat.view")) {
-    currentChatId = (const char*)(d["chat"] | ""); currentChatTitle = (const char*)(d["title"] | "");
+    currentChatId = (const char*)(d["chat"] | ""); currentChatTitle = (const char*)(d["title"] | ""); currentChatSession = (const char*)(d["session"] | ""); currentChatLive = d["live"] | false;
     messagesFromPlain((const char*)(d["text"] | "")); s_lastReply = (const char*)(d["last"] | ""); hasReply = s_lastReply.length() > 0; streaming = false; emit(Ev::Transcript, "reset"); emit(Ev::Lists);
     if (currentChatId != String(g_settings.lastChat)) { strlcpy(g_settings.lastChat, currentChatId.c_str(), sizeof(g_settings.lastChat)); settingsSave(); }
   } else if (!strcmp(t, "chat.list")) {

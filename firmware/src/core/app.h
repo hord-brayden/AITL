@@ -22,7 +22,8 @@ namespace app {
   extern std::vector<Alert> inbox;  // recent cards, newest first (max 20)
   extern uint8_t inboxUnread;
   extern NowPlaying np;
-  extern String currentModel, currentChatId, currentChatTitle, bridgeName, bridgeVersion, frontApp;
+  extern String currentModel, currentChatId, currentChatTitle, currentChatSession, bridgeName, bridgeVersion, frontApp;
+  extern bool currentChatLive;   // the bound Claude Code session has a known terminal window
   extern bool dictating, streaming, hasReply, capturing;   // capturing = device mic is recording
   extern String pairFingerprint, pairCode, pairName;
 
@@ -49,6 +50,7 @@ namespace app {
   void inboxClear();
 
   void typeToMac(const String& text);   // honours g_settings.hidTarget
+  void typeToSession(const String& text, bool enter = true);   // into the terminal running the current chat's Claude Code session
   void keyToMac(const char* combo);
   void dictation(const char* op);       // "start" | "stop" | "toggle" — routes to host Mac or device mic per settings
   void captureStart(); void captureStop(bool discard = false);

@@ -95,6 +95,11 @@ class Shared:
                     self.registry.add(x.device_id or "usb-provisioned", f"AITL {x.device_id}", token, via="usb", fw=x.fw)
                 sent.append(f"bridge {host}:{self.cfg['bridge']['ws_port']} ({mode})")
             return {"ok": True, "sent": sent, "devices": [x.device_id for x in usb]}
+        if op == "type_session":
+            for x in list(self.sessions):
+                if x.authenticated:
+                    await x.on_type_session({"session": data.get("session", ""), "text": data.get("text", ""), "enter": data.get("enter", True)}); break
+            return {"ok": True, "terminals": {k: {kk: vv for kk, vv in v.items() if kk != "at"} for k, v in (self.hooks.terminals if self.hooks else {}).items()}}
         if op == "pair_open":
             self.pairing.open(int(data.get("seconds", 180)))
             from .security import cert_fingerprint
@@ -175,7 +180,7 @@ class DeviceSession:
             "action.run": self.on_action_run, "hid.type": self.on_hid_type, "hid.key": self.on_hid_key,
             "dictation": self.on_dictation, "hid.paste_last": self.on_paste_last, "clip.set_last": self.on_clip_last,
             "media": self.on_media, "prov.ok": self.on_prov_ok,
-            "cc.list": self.on_cc_list, "cc.open": self.on_cc_open, "alert.reply": self.on_alert_reply,
+            "cc.list": self.on_cc_list, "cc.open": self.on_cc_open, "alert.reply": self.on_alert_reply, "hid.type_session": self.on_type_session,
             "audio.start": self.on_audio_start, "audio.chunk": self.on_audio_chunk, "audio.stop": self.on_audio_stop,
             "audio.cancel": self.on_audio_cancel, "settings.ack": self.on_settings_ack, "settings.dump": self.on_settings_dump,
         }.get(t)
@@ -302,7 +307,9 @@ class DeviceSession:
         if chat.model:
             self.model = chat.model
         self.last_reply = chat.last_assistant()
-        await self.send({"t": "chat.view", "chat": chat.id, "title": chat.title,
+        sid = chat.ext.get("claude_code_session", "")
+        await self.send({"t": "chat.view", "chat": chat.id, "title": chat.title, "session": sid,
+                         "live": bool(sid and self.s.hooks and self.s.hooks.terminals.get(sid)),
                          "text": chat.transcript(2800), "last": self.last_reply[:1500]})
 
     async def on_chat_delete(self, m: dict[str, Any]) -> None:
@@ -436,8 +443,26 @@ class DeviceSession:
         chat.messages = [{"role": "user", "content": f"(resumed Claude Code session {sid[:8]} • {info.project})"}, {"role": "assistant", "content": last or "(no reply yet)"}]
         self.s.chats.save(chat)
         self.chat = chat; self.last_reply = last
-        await self.send({"t": "chat.view", "chat": chat.id, "title": chat.title, "text": text, "last": last})
+        live = bool(self.s.hooks and self.s.hooks.terminals.get(sid))
+        await self.send({"t": "chat.view", "chat": chat.id, "title": chat.title, "text": text, "last": last, "session": sid, "live": live})
         await self.send({"t": "model.list", "models": self.s.router.as_wire()[:40], "model": self.model})
+
+    async def on_type_session(self, m: dict[str, Any]) -> None:
+        """Type text into the terminal window that runs a given Claude Code session (learned from its hooks)."""
+        sid = str(m.get("session", ""))[:36]; text = str(m.get("text", ""))[:4000]; enter = bool(m.get("enter", True))
+        term = (self.s.hooks.terminals.get(sid) if self.s.hooks else None) or {}
+        if not text:
+            return
+        if not term.get("app"):
+            await self.error("No live terminal known for that session yet. Type one prompt in it (or restart it) so its hooks report where it lives."); return
+        if not await self._hid_guard():
+            return
+        ok = await mac.type_into_app(term["app"], text, enter, self.s.cfg["hid"]["typing_method"], self.s.cfg["hid"]["restore_clipboard"])
+        log.info("type_session %s -> %s via %s (%s) %s", sid[:8], "ok" if ok else "FAILED", term["app"], term.get("tty"), "" if ok else mac.LAST_ERROR["text"][:140])
+        if ok:
+            await self.toast(f"Typed into {term['app']} ({term.get('project', '')})" + (" and sent" if enter else ""))
+        else:
+            await self.error("Could not type into " + term["app"] + ". " + mac.accessibility_hint())
 
     async def on_alert_reply(self, m: dict[str, Any]) -> None:
         aid, action = str(m.get("id", "")), str(m.get("action", "dismiss")).lower()

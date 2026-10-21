@@ -18,7 +18,7 @@ log = logging.getLogger("aitl.hooks")
 HOOK_PORT = 7778
 PERMISSION_WAIT = 75          # seconds the hook waits for the device before falling back to the terminal prompt
 SETTINGS = Path.home() / ".claude" / "settings.json"
-EVENTS = {"PermissionRequest": PERMISSION_WAIT + 10, "Notification": 5, "Stop": 5}
+EVENTS = {"PermissionRequest": PERMISSION_WAIT + 10, "Notification": 5, "Stop": 5, "UserPromptSubmit": 5, "SessionStart": 5}
 
 
 class HookServer:
@@ -27,6 +27,7 @@ class HookServer:
         self.broadcast = broadcast
         self.port = port
         self.pending: dict[str, asyncio.Future] = {}
+        self.terminals: dict[str, dict[str, Any]] = {}   # session id -> {app, tty, project, at}: where that Claude Code session lives
         self.admin = None                              # async (op, data) -> dict, attached by the CLI
         self.queued: list[dict[str, Any]] = []      # non-permission cards held while a permission is on screen
 
@@ -59,6 +60,10 @@ class HookServer:
                 status, payload = 200, await self.admin("probe", {})
             elif method == "POST" and path == "/admin/provision" and self.admin:
                 status, payload = 200, await self.admin("provision", json.loads(body or b"{}"))
+            elif method == "POST" and path == "/admin/type_session" and self.admin:
+                status, payload = 200, await self.admin("type_session", json.loads(body or b"{}"))
+            elif method == "GET" and path == "/admin/terminals":
+                status, payload = 200, {"terminals": {k: {kk: vv for kk, vv in v.items() if kk != "at"} for k, v in self.terminals.items()}}
             elif method == "POST" and path == "/admin/pair_open" and self.admin:
                 status, payload = 200, await self.admin("pair_open", json.loads(body or b"{}"))
             out = json.dumps(payload).encode()
@@ -72,6 +77,11 @@ class HookServer:
     async def on_event(self, event: str, d: dict[str, Any]) -> dict[str, Any]:
         sid = str(d.get("session_id", ""))[:36]
         project = Path(str(d.get("cwd", ""))).name[:24]
+        term = d.get("_terminal") or {}
+        if sid and term.get("app"):
+            self.terminals[sid] = {"app": term.get("app"), "tty": term.get("tty", ""), "project": project, "at": time.time()}
+        if event in ("UserPromptSubmit", "SessionStart"):
+            return {}
         if event == "PermissionRequest":
             tool = str(d.get("tool_name", "tool"))
             ti = d.get("tool_input") or {}
@@ -144,10 +154,41 @@ class HookServer:
 
 
 # ---------------- client side (what Claude Code runs) ----------------
+def _terminal_identity() -> dict[str, str]:
+    """Which terminal app and tty is this Claude Code session running in? (hook runs as a child of `claude`)"""
+    import subprocess
+    try:
+        ppid = os.getppid()
+        tty = subprocess.run(["/bin/ps", "-o", "tty=", "-p", str(ppid)], capture_output=True, text=True, timeout=2).stdout.strip()
+        app = ""
+        pid = ppid
+        for _ in range(12):
+            out = subprocess.run(["/bin/ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True, timeout=2).stdout.strip()
+            if not out:
+                break
+            parent, _, comm = out.partition(" ")
+            comm = comm.strip()
+            if ".app/" in comm:
+                app = comm.split(".app/")[0].split("/")[-1]
+                break
+            pid = int(parent.strip() or 0)
+            if pid <= 1:
+                break
+        return {"app": app, "tty": tty}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def hook_client(event: str) -> int:
     """Read the hook payload from stdin, relay it to the bridge, print the decision (if any). Never fails Claude Code."""
     raw = sys.stdin.read()
     timeout = EVENTS.get(event, 5)
+    try:
+        payload = json.loads(raw or "{}")
+        payload["_terminal"] = _terminal_identity()
+        raw = json.dumps(payload)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{HOOK_PORT}/hook/{event}", data=raw.encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
@@ -174,7 +215,7 @@ def install() -> str:
     hooks = cfg.setdefault("hooks", {})
     for event, timeout in EVENTS.items():
         groups = [g for g in hooks.get(event, []) if not _is_ours(g)]
-        groups.append({"matcher": "*", "hooks": [_hook_entry(event, timeout)]} if event == "PermissionRequest" else {"hooks": [_hook_entry(event, timeout)]})
+        groups.append({"matcher": "*", "hooks": [_hook_entry(event, timeout)]} if event in ("PermissionRequest", "SessionStart") else {"hooks": [_hook_entry(event, timeout)]})
         hooks[event] = groups
     backup = SETTINGS.with_suffix(".json.bak")
     if SETTINGS.exists():

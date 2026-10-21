@@ -91,6 +91,25 @@ async def type_text(text: str, method: str = "paste", restore_clipboard: bool = 
     return rc == 0
 
 
+async def type_into_app(app: str, text: str, press_enter: bool, method: str = "paste", restore_clipboard: bool = True) -> bool:
+    """Bring `app` to the front, paste the text into it, optionally press Return."""
+    # `open -a` works by app name even when the process is named differently (Warp's process is "stable")
+    proc = await asyncio.create_subprocess_exec("/usr/bin/open", "-a", app, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    await proc.wait()
+    if proc.returncode != 0:
+        rc, _ = await _osa(f'tell application "{_esc(app)}" to activate')
+        if rc != 0:
+            return False
+    await asyncio.sleep(0.6)
+    if not await type_text(text, method, restore_clipboard):
+        return False
+    if press_enter:
+        await asyncio.sleep(0.15)
+        rc, _ = await _osa('tell application "System Events" to key code 36')
+        return rc == 0
+    return True
+
+
 async def key_combo(spec: str) -> bool:
     parts = [p.strip().lower() for p in spec.split("+") if p.strip()]
     mods = [MODS[p] for p in parts if p in MODS]
@@ -213,10 +232,23 @@ async def media(key: str) -> bool:
     return rc == 0
 
 
+def accessibility_trusted() -> bool:
+    """AXIsProcessTrusted() for this process (macOS evaluates the responsible app, i.e. AITL Bridge.app)."""
+    if not IS_MAC:
+        return False
+    try:
+        import ctypes
+        lib = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        lib.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(lib.AXIsProcessTrusted())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def probe() -> dict[str, Any]:
-    """Can this process drive System Events? (Accessibility permission for the bridge's own identity.)"""
-    rc, out = await _osa('tell application "System Events" to keystroke ""', timeout=8)
-    return {"keystrokes": rc == 0, "error": "" if rc == 0 else out[:200], "accessibility_denied": rc != 0 and accessibility_denied(out)}
+    """Can this process drive System Events? Uses the real Accessibility check (an empty keystroke passes without it)."""
+    ok = accessibility_trusted()
+    return {"keystrokes": ok, "error": "" if ok else "Accessibility not granted to AITL Bridge", "accessibility_denied": not ok}
 
 
 async def notify(title: str, text: str) -> None:
