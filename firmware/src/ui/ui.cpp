@@ -35,7 +35,12 @@ lv_obj_t* newScreen() {
 void load(lv_obj_t* scr) {
   lv_obj_t* old = lv_scr_act();
   if (old == scr) return;
-  lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_IN, 90, 0, old != nullptr);   // auto_del: safe from the old screen's events
+  if (ESP.getFreeHeap() < 60000) {           // tight on RAM (Wi-Fi mode): no fade, and free the old screen on the next tick
+    lv_scr_load(scr);
+    if (old) lv_obj_del_async(old);          // async: safe even when called from the old screen's own event
+    return;
+  }
+  lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_IN, 90, 0, old != nullptr);   // auto_del after the fade
 }
 static void backCb(lv_event_t*) { ui::showHome(); }
 lv_obj_t* statusBar(lv_obj_t* scr, const char* section, const char* ttl, bool backBtn) {

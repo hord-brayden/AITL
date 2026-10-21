@@ -44,60 +44,94 @@ static void cbReset(lv_event_t*) { confirm("Factory reset?", "All settings, Wi-F
 static void cbReboot(lv_event_t*) { ESP.restart(); }
 static void cbWizard(lv_event_t*) { showSetupWizard(); }
 
-void showSettings() {
-  lv_obj_t* scr = newScreen(); statusBar(scr, "06", "SETUP", true);
+static int s_section = -1;
+static void evSection(lv_event_t* e) { s_section = (int)(intptr_t)lv_event_get_user_data(e); showSettings(); }
+static void evBackToMenu(lv_event_t*) { s_section = -1; showSettings(); }
+static lv_obj_t* settingsList(lv_obj_t* scr) {
   lv_obj_t* list = lv_obj_create(scr); lv_obj_remove_style_all(list); lv_obj_set_width(list, LV_PCT(100)); lv_obj_set_flex_grow(list, 1);
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN); lv_obj_set_style_pad_row(list, 3, 0); lv_obj_set_scroll_dir(list, LV_DIR_VER); lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+  return list;
+}
+static void menuTile(lv_obj_t* list, const char* icon, const char* title, const char* sub, int section) {
+  lv_obj_t* r = addAction(list, title, sub, evSection, (void*)(intptr_t)section);
+  lv_obj_t* ic = makeLabel(r, icon, &body); lv_obj_set_style_text_color(ic, lv_color_hex(CO_CAERULEI), 0); lv_obj_move_to_index(ic, 0);
+}
 
-  sectionLabel(list, "CONNECTION");
-  addAction(list, "USB link", app::bridgeLinked() && app::linkSummary() == "USB" ? app::bridgeName.c_str() : "plug in + run aitl serve", nullptr, nullptr);
-  addSwitch(list, "Wi-Fi", g_settings.wifiEnabled, cbWifi, nullptr);
-  addAction(list, "Network", bridge::wifiStatus().c_str(), cbSsid, nullptr);
-  { String h = g_settings.bridgeHost[0] ? String(g_settings.bridgeHost) + ":" + g_settings.bridgePort : String("not set"); addAction(list, "Bridge host", h.c_str(), cbHost, nullptr); }
-  addAction(list, "Bridge", bridge::bridgeStatus().c_str(), nullptr, nullptr);
-  addAction(list, "Pair over network", bridge::hasBridgeCert() ? "paired (re-pair)" : "start", cbPair, nullptr);
-  if (bridge::hasBridgeCert()) addAction(list, "Forget bridge", "", cbForget, nullptr);
-  addSwitch(list, "Bluetooth keyboard", g_settings.bleEnabled, cbBle, nullptr);
-  addAction(list, "BLE status", blehid::status().c_str(), nullptr, nullptr);
-  addDropdown(list, "Keystrokes via", "Bridge (USB/Wi-Fi)\nBluetooth HID", g_settings.hidTarget, cbHidTarget, nullptr);
-  addDropdown(list, "BLE dictation key", "Right Cmd x2\nCtrl x2\nF5\nCmd+Opt+D", g_settings.dictShortcut, cbDictSc, nullptr);
-  addSwitch(list, "Bluetooth link (bridge over BLE)", g_settings.bleLink, cbBleLink, nullptr);
-
-  sectionLabel(list, "DICTATION");
-  addDropdown(list, "Microphone", "Host Mac\nDevice mic (P3)", g_settings.dictSource, cbDictSrc, nullptr);
-  addDropdown(list, "Device mic sends to", "Ask the AI\nType into Mac", g_settings.dictTarget, cbDictTgt, nullptr);
-  addSlider(list, "Mic gain", 1, 8, g_settings.micGain, cbMicGain, nullptr);
-  addAction(list, "Mic test (level meter)", "", cbMicTest, nullptr);
-
-  sectionLabel(list, "DISPLAY");
-  addSlider(list, "Brightness", 10, 255, g_settings.brightness, cbBright, nullptr);
-  { static const uint16_t v[] = {10, 30, 60, 120, 300, 600, 0}; uint16_t sel = 3; for (int i = 0; i < 7; i++) if (v[i] == g_settings.screenTimeout) sel = i;
-    addDropdown(list, "Screen dims after", "10 s\n30 s\n1 min\n2 min\n5 min\n10 min\nNever (always on)", sel, cbTimeout, nullptr); }
-  addDropdown(list, "Rotation", "Portrait\nLandscape A\nPortrait flipped\nLandscape B (SD slot up)", g_settings.rotation & 3, cbRotate, nullptr);
-  addSwitch(list, "Invert colors", g_settings.invertColors, cbInvert, nullptr);
-  addSwitch(list, "Swap red/blue", g_settings.bgrOrder, cbBgr, nullptr);
-
-  sectionLabel(list, "TOUCH");
-  addAction(list, "Calibrate touch", "", cbCal, nullptr);
-  { static const uint16_t v[] = {250, 400, 600, 900}; uint16_t sel = 1; for (int i = 0; i < 4; i++) if (v[i] == g_settings.longPressMs) sel = i;
-    addDropdown(list, "Long-press time", "250 ms\n400 ms\n600 ms\n900 ms", sel, cbLongPress, nullptr); }
-  addDropdown(list, "Touch sensitivity", "Instant\nNormal\nFirm\nDeliberate", g_settings.touchDebounce - 1, cbDebounce, nullptr);
-  addSwitch(list, "LED flash on tap", g_settings.hapticLed, cbTapLed, nullptr);
-
-  sectionLabel(list, "STORAGE");
-  addAction(list, "microSD", sdInfo().c_str(), nullptr, nullptr);
-  addSwitch(list, "Log chats to microSD", g_settings.sdLog, cbSdLog, nullptr);
-
-  sectionLabel(list, "ABOUT");
-  addAction(list, "Firmware", "AITL " AITL_FW_VERSION " / " TFT_PANEL_NAME, nullptr, nullptr);
-  addAction(list, "Device ID", app::deviceId().c_str(), nullptr, nullptr);
-  { String b = app::bridgeName.length() ? app::bridgeName + " " + app::bridgeVersion : String("none"); addAction(list, "Bridge", b.c_str(), nullptr, nullptr); }
-  { String fp = bridge::bridgeCertFingerprint(); if (fp.length()) addAction(list, "Pinned cert", fp.substring(0, 23).c_str(), nullptr, nullptr); }
-  { char h[32]; snprintf(h, sizeof(h), "%u KB free", (unsigned)(ESP.getFreeHeap() / 1024)); addAction(list, "Memory", h, nullptr, nullptr); }
-  addAction(list, "Run setup wizard", "", cbWizard, nullptr);
-  addAction(list, "Reboot", "", cbReboot, nullptr);
-  addAction(list, "Factory reset", "", cbReset, nullptr);
-  lv_obj_t* foot = makeLabel(list, AITL_ORG "  //  " AITL_MOTTO, &mono); lv_obj_set_style_text_color(foot, lv_color_hex(CO_MUTE), 0); lv_obj_set_style_pad_ver(foot, 8, 0);
+// Settings is split into small sections built on demand: the whole list at once needs ~35 KB of widgets, which a
+// no-PSRAM board in Wi-Fi mode does not have next to the Home screen.
+void showSettings() {
+  lv_obj_t* scr = newScreen();
+  if (s_section < 0) {
+    statusBar(scr, "06", "SETUP", true);
+    lv_obj_t* list = settingsList(scr);
+    { String lk = app::bridgeLinked() ? app::linkSummary() + " linked" : String("not linked"); menuTile(list, LV_SYMBOL_USB, "Connection", lk.c_str(), 0); }
+    menuTile(list, LV_SYMBOL_AUDIO, "Dictation", g_settings.dictSource == 1 ? "device mic" : "host Mac", 1);
+    menuTile(list, LV_SYMBOL_IMAGE, "Display", "", 2);
+    menuTile(list, LV_SYMBOL_EDIT, "Touch", "", 3);
+    menuTile(list, LV_SYMBOL_SD_CARD, "Storage", sdReady() ? "card present" : "no card", 4);
+    menuTile(list, LV_SYMBOL_SETTINGS, "About & maintenance", AITL_FW_VERSION, 5);
+    { char h[32]; snprintf(h, sizeof(h), "%u KB free", (unsigned)(ESP.getFreeHeap() / 1024)); lv_obj_t* f = makeLabel(list, h, &mono); lv_obj_set_style_text_color(f, lv_color_hex(CO_MUTE), 0); lv_obj_set_style_pad_top(f, 6, 0); }
+    load(scr); return;
+  }
+  static const char* names[] = {"CONNECTION", "DICTATION", "DISPLAY", "TOUCH", "STORAGE", "ABOUT"};
+  lv_obj_t* bar = statusBar(scr, "06", names[s_section], false);
+  { lv_obj_t* b = lv_btn_create(bar); lv_obj_remove_style_all(b); lv_obj_add_style(b, &btn, 0); lv_obj_add_style(b, &btnPressed, LV_STATE_PRESSED);
+    lv_obj_set_size(b, big() ? 64 : 42, chipH() + 6); lv_obj_set_style_pad_all(b, 0, 0); lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0); lv_obj_move_to_index(b, 0);
+    lv_obj_t* l = lv_label_create(b); lv_label_set_text(l, LV_SYMBOL_LEFT); lv_obj_center(l); lv_obj_add_event_cb(b, evBackToMenu, LV_EVENT_CLICKED, nullptr); }
+  lv_obj_t* list = settingsList(scr);
+  switch (s_section) {
+    case 0: {
+      addAction(list, "USB link", app::bridgeLinked() && app::linkSummary() == "USB" ? app::bridgeName.c_str() : "plug in; the Mac app links it", nullptr, nullptr);
+      addSwitch(list, "Wi-Fi (restarts device)", g_settings.wifiEnabled, cbWifi, nullptr);
+      addAction(list, "Network", bridge::wifiStatus().c_str(), cbSsid, nullptr);
+      { String h = g_settings.bridgeHost[0] ? String(g_settings.bridgeHost) + ":" + g_settings.bridgePort : String("not set"); addAction(list, "Bridge host", h.c_str(), cbHost, nullptr); }
+      addAction(list, "Bridge", bridge::bridgeStatus().c_str(), nullptr, nullptr);
+      addAction(list, "Pair over network", bridge::hasBridgeCert() ? "paired (re-pair)" : "start", cbPair, nullptr);
+      if (bridge::hasBridgeCert()) addAction(list, "Forget bridge", "", cbForget, nullptr);
+      addSwitch(list, "Bluetooth keyboard", g_settings.bleEnabled, cbBle, nullptr);
+      addAction(list, "BLE status", blehid::status().c_str(), nullptr, nullptr);
+      addSwitch(list, "Bluetooth link (bridge over BLE)", g_settings.bleLink, cbBleLink, nullptr);
+      addDropdown(list, "Keystrokes via", "Bridge (USB/Wi-Fi)\nBluetooth HID", g_settings.hidTarget, cbHidTarget, nullptr);
+      addDropdown(list, "BLE dictation key", "Right Cmd x2\nCtrl x2\nF5\nCmd+Opt+D", g_settings.dictShortcut, cbDictSc, nullptr);
+      break; }
+    case 1: {
+      addDropdown(list, "Microphone", "Host Mac\nDevice mic (P3)", g_settings.dictSource, cbDictSrc, nullptr);
+      addDropdown(list, "Device mic sends to", "Ask the AI\nType into Mac", g_settings.dictTarget, cbDictTgt, nullptr);
+      addSlider(list, "Mic gain", 1, 8, g_settings.micGain, cbMicGain, nullptr);
+      addAction(list, "Mic test (level meter)", "", cbMicTest, nullptr);
+      lv_obj_t* h = makeLabel(list, "BOOT button: tap = dictate, double-tap = next chat, hold = talk (device mic)", &muted); lv_obj_set_width(h, LV_PCT(100)); lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
+      break; }
+    case 2: {
+      addSlider(list, "Brightness", 10, 255, g_settings.brightness, cbBright, nullptr);
+      { static const uint16_t v[] = {10, 30, 60, 120, 300, 600, 0}; uint16_t sel = 3; for (int i = 0; i < 7; i++) if (v[i] == g_settings.screenTimeout) sel = i;
+        addDropdown(list, "Screen dims after", "10 s\n30 s\n1 min\n2 min\n5 min\n10 min\nNever (always on)", sel, cbTimeout, nullptr); }
+      addDropdown(list, "Rotation", "Portrait\nLandscape A\nPortrait flipped\nLandscape B (SD slot up)", g_settings.rotation & 3, cbRotate, nullptr);
+      addSwitch(list, "Invert colors", g_settings.invertColors, cbInvert, nullptr);
+      addSwitch(list, "Swap red/blue", g_settings.bgrOrder, cbBgr, nullptr);
+      break; }
+    case 3: {
+      addAction(list, "Calibrate touch", "", cbCal, nullptr);
+      { static const uint16_t v[] = {250, 400, 600, 900}; uint16_t sel = 1; for (int i = 0; i < 4; i++) if (v[i] == g_settings.longPressMs) sel = i;
+        addDropdown(list, "Long-press time", "250 ms\n400 ms\n600 ms\n900 ms", sel, cbLongPress, nullptr); }
+      addDropdown(list, "Touch sensitivity", "Instant\nNormal\nFirm\nDeliberate", g_settings.touchDebounce - 1, cbDebounce, nullptr);
+      addSwitch(list, "LED flash on tap", g_settings.hapticLed, cbTapLed, nullptr);
+      break; }
+    case 4: {
+      addAction(list, "microSD", sdInfo().c_str(), nullptr, nullptr);
+      addSwitch(list, "Log chats to microSD", g_settings.sdLog, cbSdLog, nullptr);
+      break; }
+    default: {
+      addAction(list, "Firmware", "AITL " AITL_FW_VERSION " / " AITL_BOARD_NAME " / " TFT_PANEL_NAME, nullptr, nullptr);
+      addAction(list, "Device ID", app::deviceId().c_str(), nullptr, nullptr);
+      { String b = app::bridgeName.length() ? app::bridgeName + " " + app::bridgeVersion : String("none"); addAction(list, "Bridge", b.c_str(), nullptr, nullptr); }
+      { String fp = bridge::bridgeCertFingerprint(); if (fp.length()) addAction(list, "Pinned cert", fp.substring(0, 23).c_str(), nullptr, nullptr); }
+      { char h[32]; snprintf(h, sizeof(h), "%u KB free", (unsigned)(ESP.getFreeHeap() / 1024)); addAction(list, "Memory", h, nullptr, nullptr); }
+      addAction(list, "Run setup wizard", "", cbWizard, nullptr);
+      addAction(list, "Reboot", "", cbReboot, nullptr);
+      addAction(list, "Factory reset", "", cbReset, nullptr);
+      lv_obj_t* foot = makeLabel(list, AITL_ORG "  //  " AITL_MOTTO, &mono); lv_obj_set_style_text_color(foot, lv_color_hex(CO_MUTE), 0); lv_obj_set_style_pad_ver(foot, 8, 0);
+      break; }
+  }
   load(scr);
 }
 
