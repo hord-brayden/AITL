@@ -66,6 +66,7 @@ struct SettingsView: View {
                 statusRow("Bridge link", model.str("bridgeStatus"), .secondary)
                 statusRow("microSD", model.str("sd"), .secondary)
             }
+            statusRow("App trusted (AX)", AXIsProcessTrusted() ? "yes" : "no", AXIsProcessTrusted() ? .green : .red)
             if let ok = supervisor.status.macControl {
                 statusRow("Mac control", ok ? "allowed" : "blocked: grant Accessibility", ok ? .green : .red)
                 if !ok {

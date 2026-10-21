@@ -259,7 +259,7 @@ def cmd_status(args) -> None:
         print("  mac control: OK (Accessibility granted to the bridge)")
     else:
         print(f"  mac control: BLOCKED - {pr.get('error') or pr.get('error', '')}")
-        print("    fix: System Settings > Privacy & Security > Accessibility > + > ~/.config/aitl/AITL Bridge.app, then: aitl stop && aitl autostart on")
+        print("    fix: System Settings > Privacy & Security > Accessibility > enable 'AITL Bridge' (the /Applications one), then quit and reopen the app")
     for d in res.get("devices", []):
         print(f"  {d['id']}  via {d['transport']}  fw {d['fw']}  model {d['model']}")
     if not res.get("devices"):
