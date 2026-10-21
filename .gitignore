@@ -1,0 +1,9 @@
+firmware/.pio/
+bridge/.venv/
+bridge/*.egg-info/
+macapp/dist/
+macapp/.build/
+__pycache__/
+.pytest_cache/
+.DS_Store
+*.bin

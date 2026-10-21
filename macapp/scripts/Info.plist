@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>AITL Bridge</string>
+	<key>CFBundleDisplayName</key>
+	<string>AITL Bridge</string>
+	<key>CFBundleExecutable</key>
+	<string>AITLBridge</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.caeruli-obscuri.aitl</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Caeruli Obscuri Laboratorium</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>AITL Bridge links your AITL device over Bluetooth to relay chats, dictation and Claude Code alerts.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>AITL Bridge types text, presses keys and starts dictation in the frontmost app when your AITL device asks it to.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Not used directly; dictation audio comes from the device or from macOS dictation.</string>
+</dict>
+</plist>
