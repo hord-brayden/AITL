@@ -59,7 +59,24 @@ static String unwrapSigned(const char* raw, size_t len) {
 static String s_caPem;
 static uint32_t s_lastWifiTry = 0, s_lastPing = 0;
 static const char* CA_PATH = "/bridge_ca.pem";
-static bool s_fsOk = false;
+static const char* WIFI_PATH = "/wifi.json";
+static bool s_fsOk;
+static TaskHandle_t s_netTask;
+static volatile bool s_reqApply;
+struct Net { String ssid, pass; int prio; };
+static std::vector<Net> s_nets; static String s_forceSsid;
+static volatile bool s_scanReq = false, s_scanReady = false; static uint8_t s_wifiFails = 0; static std::vector<std::pair<String, int>> s_scan;
+static void netsLoad() {
+  s_nets.clear(); if (!s_fsOk || !LittleFS.exists(WIFI_PATH)) return;
+  File f = LittleFS.open(WIFI_PATH, "r"); DynamicJsonDocument d(3072); if (deserializeJson(d, f) == DeserializationError::Ok) for (JsonObject o : d.as<JsonArray>()) s_nets.push_back({(const char*)(o["ssid"] | ""), (const char*)(o["pass"] | ""), (int)(o["prio"] | 0)});
+  f.close();
+}
+static void netsSave() {
+  if (!s_fsOk) return; DynamicJsonDocument d(3072); JsonArray a = d.to<JsonArray>();
+  for (auto& n : s_nets) { JsonObject o = a.createNestedObject(); o["ssid"] = n.ssid; o["pass"] = n.pass; o["prio"] = n.prio; }
+  File f = LittleFS.open(WIFI_PATH, "w"); if (f) { serializeJson(d, f); f.close(); }
+}
+// s_fsOk declared above
 
 void log(const char* fmt, ...) {
   char buf[256]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
@@ -67,6 +84,18 @@ void log(const char* fmt, ...) {
 }
 
 void setHandler(Handler h) { s_handler = h; }
+void wifiNetworks(JsonArray out) { for (auto& n : s_nets) { JsonObject o = out.createNestedObject(); o["ssid"] = n.ssid; o["prio"] = n.prio; o["current"] = (n.ssid == g_settings.wifiSsid); } }
+bool wifiAdd(const char* ssid, const char* pass, int prio) {
+  if (!ssid || !*ssid) return false;
+  bool found = false; for (auto& n : s_nets) if (n.ssid == ssid) { n.pass = pass; n.prio = prio; found = true; }
+  if (!found) { if (s_nets.size() >= 8) s_nets.erase(s_nets.begin()); s_nets.push_back({ssid, pass, prio}); }
+  netsSave(); strlcpy(g_settings.wifiSsid, ssid, sizeof(g_settings.wifiSsid)); strlcpy(g_settings.wifiPass, pass, sizeof(g_settings.wifiPass)); settingsSave();
+  return true;
+}
+bool wifiRemove(const char* ssid) { for (size_t i = 0; i < s_nets.size(); i++) if (s_nets[i].ssid == ssid) { s_nets.erase(s_nets.begin() + i); netsSave(); return true; } return false; }
+bool wifiUse(const char* ssid) { for (auto& n : s_nets) if (n.ssid == ssid) { s_forceSsid = ssid; strlcpy(g_settings.wifiSsid, n.ssid.c_str(), sizeof(g_settings.wifiSsid)); strlcpy(g_settings.wifiPass, n.pass.c_str(), sizeof(g_settings.wifiPass)); settingsSave(); if (s_netTask) s_reqApply = true; return true; } return false; }
+void wifiScanRequest() { s_scanReq = true; }
+bool wifiScanResults(JsonArray out) { if (!s_scanReady) return false; for (auto& r : s_scan) { JsonObject o = out.createNestedObject(); o["ssid"] = r.first; o["rssi"] = r.second; } s_scanReady = false; return true; }
 void setDeviceId(const String& id) { s_deviceId = id; }
 bool connected() { return s_serialHello || s_wifiHello || s_bleHello; }
 bool bleUp() { return blehid::linkSubscribed(); }
@@ -110,10 +139,10 @@ static void dispatch(const char* json, size_t len, Transport from) {
 // Frames cross between the tasks through mutex-protected queues; the protocol handler always runs on the main loop.
 #include <vector>
 #include <string>
-static TaskHandle_t s_netTask = nullptr;
+// s_netTask declared above
 static SemaphoreHandle_t s_qLock = nullptr;
 static std::vector<std::string> s_wsIn, s_wsOut;
-static volatile bool s_reqApply = false, s_reqDisconnect = false, s_reqSignedReset = false;
+static volatile bool s_reqDisconnect = false, s_reqSignedReset = false;
 static volatile bool s_mdnsUp = false;
 
 static void qPush(std::vector<std::string>& q, const char* data, size_t len) {
@@ -164,24 +193,45 @@ static void wsStart() {   // net task context
 }
 static void wsStop() { if (s_wsStarted) { s_ws.disconnect(); s_wsStarted = false; } s_wsConnected = false; s_wifiHello = false; }
 
+static void doScan() {   // net task context, blocking ~2 s
+  WiFi.mode(WIFI_STA);
+  if (!wifiUp()) { WiFi.disconnect(false, false); vTaskDelay(pdMS_TO_TICKS(150)); }   // a connect in progress makes the scan fail
+  int n = WiFi.scanNetworks(false, false, false, 300);
+  if (n < 0) { log("wifi scan failed (%d)", n); vTaskDelay(pdMS_TO_TICKS(500)); n = WiFi.scanNetworks(false, false, false, 300); }
+  log("wifi scan: %d networks", n);
+  s_scan.clear();
+  for (int i = 0; i < n && s_scan.size() < 20; i++) { String ss = WiFi.SSID(i); if (!ss.length()) continue; bool dup = false; for (auto& x : s_scan) if (x.first == ss) { dup = true; if (WiFi.RSSI(i) > x.second) x.second = WiFi.RSSI(i); } if (!dup) s_scan.push_back({ss, WiFi.RSSI(i)}); }
+  WiFi.scanDelete();
+  s_scanReady = true;
+}
 static void wifiConnectNow() {   // net task context
   WiFi.mode(WIFI_STA); WiFi.setHostname(AITL_HOSTNAME); WiFi.setSleep(true);
-  WiFi.begin(g_settings.wifiSsid, g_settings.wifiPass);
+  const char* ssid = g_settings.wifiSsid; const char* pass = g_settings.wifiPass;
+  if (s_forceSsid.length()) { for (auto& n : s_nets) if (n.ssid == s_forceSsid) { ssid = n.ssid.c_str(); pass = n.pass.c_str(); } s_forceSsid = ""; }
+  else if (s_nets.size() > 1) {   // several saved: pick the strongest visible one (ties -> higher prio)
+    doScan(); int best = -1000; const Net* pick = nullptr;
+    for (auto& r : s_scan) for (auto& n : s_nets) if (n.ssid == r.first) { int score = r.second + n.prio * 20; if (score > best) { best = score; pick = &n; } }
+    if (pick) { ssid = pick->ssid.c_str(); pass = pick->pass.c_str(); strlcpy(g_settings.wifiSsid, ssid, sizeof(g_settings.wifiSsid)); strlcpy(g_settings.wifiPass, pass, sizeof(g_settings.wifiPass)); }
+  }
+  if (!*ssid) { s_lastWifiTry = millis(); return; }
+  WiFi.begin(ssid, pass);
   s_lastWifiTry = millis();
-  log("wifi -> %s", g_settings.wifiSsid);
+  log("wifi -> %s (%u saved)", ssid, (unsigned)s_nets.size());
 }
 
 static void netTask(void*) {
   for (;;) {
     if (s_reqDisconnect) { s_reqDisconnect = false; wsStop(); WiFi.disconnect(true, true); WiFi.mode(WIFI_OFF); s_mdnsUp = false; }
-    if (s_reqApply) { s_reqApply = false; wsStop(); if (g_settings.wifiEnabled && g_settings.wifiSsid[0]) wifiConnectNow(); }
+    if (s_reqApply) { s_reqApply = false; wsStop(); if (g_settings.wifiEnabled && (g_settings.wifiSsid[0] || !s_nets.empty())) wifiConnectNow(); }
     if (s_reqRestartWs) { s_reqRestartWs = false; wsStop(); }
-    if (g_settings.wifiEnabled && g_settings.wifiSsid[0]) {
+    if (s_scanReq) { s_scanReq = false; bool wasUp = wifiUp(); doScan(); if (!wasUp) s_lastWifiTry = 0; }   // reconnect right after an on-demand scan
+    if (g_settings.wifiEnabled && (g_settings.wifiSsid[0] || !s_nets.empty())) {
       if (!wifiUp()) {
         if (s_wsStarted) wsStop();
         s_mdnsUp = false;
-        if (millis() - s_lastWifiTry > 20000) wifiConnectNow();
+        if (millis() - s_lastWifiTry > 20000UL * (1 + (s_wifiFails < 5 ? s_wifiFails : 5))) { if (s_lastWifiTry) s_wifiFails++; wifiConnectNow(); }   // back off to 2 min when the network is away
       } else {
+        s_wifiFails = 0;
         if (!s_mdnsUp) { s_mdnsUp = MDNS.begin(AITL_HOSTNAME); log("wifi up ip=%s gw=%s rssi=%d -> bridge %s:%u", WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI(), g_settings.bridgeHost, g_settings.bridgePort); }
         if (!s_wsStarted) wsStart();
         if (s_wsStarted) {
@@ -201,7 +251,7 @@ static void netEnsureTask() {
 }
 
 void wifiApply() {
-  if (!g_settings.wifiEnabled || !g_settings.wifiSsid[0]) { wifiDisconnect(); return; }
+  if (!g_settings.wifiEnabled || (!g_settings.wifiSsid[0] && s_nets.empty())) { wifiDisconnect(); return; }
   netEnsureTask(); s_reqApply = true;
 }
 void wifiDisconnect() { if (s_netTask) s_reqDisconnect = true; }
@@ -239,7 +289,9 @@ void begin() {
   blehid::setLineHandler(bleLine);
   s_fsOk = LittleFS.begin(true);
   if (s_fsOk && LittleFS.exists(CA_PATH)) { File f = LittleFS.open(CA_PATH, "r"); s_caPem = f.readString(); f.close(); }
-  log("littlefs %s, cert %s", s_fsOk ? "ok" : "FAIL", s_caPem.length() ? "present" : "none");
+  netsLoad();
+  if (s_nets.empty() && g_settings.wifiSsid[0]) { s_nets.push_back({g_settings.wifiSsid, g_settings.wifiPass, 0}); netsSave(); }   // migrate the single network
+  log("littlefs %s, cert %s, %u wifi networks", s_fsOk ? "ok" : "FAIL", s_caPem.length() ? "present" : "none", (unsigned)s_nets.size());
   if (g_settings.wifiEnabled) wifiApply();
 }
 

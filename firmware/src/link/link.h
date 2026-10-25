@@ -34,5 +34,12 @@ namespace bridge {
   bool hasBridgeCert();
   String bridgeCertFingerprint();        // "AB:CD:..." sha256 of stored cert (DER)
   void log(const char* fmt, ...);        // '#'-prefixed serial log
+  // Saved Wi-Fi networks (LittleFS /wifi.json). The net task scans and joins the strongest known one.
+  void wifiNetworks(JsonArray out);      // [{ssid, prio, current}]
+  bool wifiAdd(const char* ssid, const char* pass, int prio = 0);   // upsert, becomes current
+  bool wifiRemove(const char* ssid);
+  bool wifiUse(const char* ssid);        // force this one next
+  void wifiScanRequest();                // async; results arrive via scanResults()
+  bool wifiScanResults(JsonArray out);   // true when a fresh scan is available: [{ssid, rssi}]
   bool bleUp();                          // NUS subscribed
 }

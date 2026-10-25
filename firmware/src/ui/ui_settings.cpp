@@ -32,8 +32,20 @@ static void cbMicGain(lv_event_t* e) { g_settings.micGain = lv_slider_get_value(
 static void cbBleLink(lv_event_t* e) { g_settings.bleLink = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave(); if (g_settings.bleEnabled) { blehid::end(); blehid::begin(); } toast(g_settings.bleLink ? "BLE link on: run aitl serve --ble" : "BLE link off"); }
 static void cbMicTest(lv_event_t*);
 static void cbDictSc(lv_event_t* e) { g_settings.dictShortcut = lv_dropdown_get_selected(lv_event_get_target(e)); settingsSave(); }
-static void ssidDone(const char* v) { strlcpy(g_settings.wifiSsid, v, sizeof(g_settings.wifiSsid)); settingsSave(); showTextEntry("WI-FI PASSWORD", g_settings.wifiPass, true, [](const char* p) { strlcpy(g_settings.wifiPass, p, sizeof(g_settings.wifiPass)); g_settings.wifiEnabled = true; settingsSave(); bridge::wifiApply(); showSettings(); }); }
-static void cbSsid(lv_event_t*) { showTextEntry("WI-FI NETWORK NAME", g_settings.wifiSsid, false, ssidDone); }
+static char s_newSsid[33];
+static void ssidDone(const char* v) { strlcpy(s_newSsid, v, sizeof(s_newSsid)); showTextEntry("WI-FI PASSWORD", "", true, [](const char* p) { bridge::wifiAdd(s_newSsid, p, 0); g_settings.wifiEnabled = true; settingsSave(); bridge::wifiApply(); showSettings(); }); }
+static void cbSsid(lv_event_t*) { s_newSsid[0] = 0; showTextEntry("ADD WI-FI NETWORK", "", false, ssidDone); }
+static char s_pickSsid[33];
+static void doUseNet() { bridge::wifiUse(s_pickSsid); toast("Switching network"); showSettings(); }
+static void doForgetNet() { bridge::wifiRemove(s_pickSsid); showSettings(); }
+static void cbNet(lv_event_t* e) {
+  const char* ssid = (const char*)lv_event_get_user_data(e); strlcpy(s_pickSsid, ssid, sizeof(s_pickSsid));
+  if (!strcmp(ssid, g_settings.wifiSsid)) confirm("Forget this network?", s_pickSsid, doForgetNet);
+  else confirm("Switch to this network?", s_pickSsid, doUseNet);
+}
+static void doForgetBonds() { blehid::forgetBonds(); toast("Bluetooth pairings forgotten"); showSettings(); }
+static void cbBonds(lv_event_t*) { confirm("Forget all pairings?", "Your Mac/phone will need to pair again.", doForgetBonds); }
+static DynamicJsonDocument* s_netDoc = nullptr;
 static void hostDone(const char* v) { strlcpy(g_settings.bridgeHost, v, sizeof(g_settings.bridgeHost)); settingsSave(); showTextEntry("BRIDGE PORT", String(g_settings.bridgePort).c_str(), false, [](const char* p) { int port = atoi(p); if (port > 0 && port < 65536) g_settings.bridgePort = port; settingsSave(); showSettings(); }); }
 static void cbHost(lv_event_t*) { showTextEntry("BRIDGE HOST (mac ip or name)", g_settings.bridgeHost, false, hostDone); }
 static void cbPair(lv_event_t*) { app::startNetworkPairing(); }
@@ -83,13 +95,16 @@ void showSettings() {
     case 0: {
       addAction(list, "USB link", app::bridgeLinked() && app::linkSummary() == "USB" ? app::bridgeName.c_str() : "plug in; the Mac app links it", nullptr, nullptr);
       addSwitch(list, "Wi-Fi (restarts device)", g_settings.wifiEnabled, cbWifi, nullptr);
-      addAction(list, "Network", bridge::wifiStatus().c_str(), cbSsid, nullptr);
+      addAction(list, "Add network", bridge::wifiStatus().c_str(), cbSsid, nullptr);
+      { if (s_netDoc) delete s_netDoc; s_netDoc = new DynamicJsonDocument(1024); JsonArray a = s_netDoc->to<JsonArray>(); bridge::wifiNetworks(a);
+        for (JsonObject o : a) { const char* ss = o["ssid"]; bool cur = o["current"]; addAction(list, ss, cur ? "current (tap to forget)" : "saved (tap to use)", cbNet, (void*)ss); } }
       { String h = g_settings.bridgeHost[0] ? String(g_settings.bridgeHost) + ":" + g_settings.bridgePort : String("not set"); addAction(list, "Bridge host", h.c_str(), cbHost, nullptr); }
       addAction(list, "Bridge", bridge::bridgeStatus().c_str(), nullptr, nullptr);
       addAction(list, "Pair over network", bridge::hasBridgeCert() ? "paired (re-pair)" : "start", cbPair, nullptr);
       if (bridge::hasBridgeCert()) addAction(list, "Forget bridge", "", cbForget, nullptr);
       addSwitch(list, "Bluetooth keyboard", g_settings.bleEnabled, cbBle, nullptr);
       addAction(list, "BLE status", blehid::status().c_str(), nullptr, nullptr);
+      { int b = blehid::bondCount(); if (b > 0) { char t[24]; snprintf(t, sizeof(t), "%d remembered", b); addAction(list, "Paired devices", t, cbBonds, nullptr); } }
       addSwitch(list, "Bluetooth link (bridge over BLE)", g_settings.bleLink, cbBleLink, nullptr);
       addDropdown(list, "Keystrokes via", "Bridge (USB/Wi-Fi)\nBluetooth HID", g_settings.hidTarget, cbHidTarget, nullptr);
       addDropdown(list, "BLE dictation key", "Right Cmd x2\nCtrl x2\nF5\nCmd+Opt+D", g_settings.dictShortcut, cbDictSc, nullptr);

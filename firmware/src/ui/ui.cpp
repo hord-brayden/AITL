@@ -7,6 +7,8 @@
 #include "../link/link.h"
 #include "../ble/ble_hid.h"
 #include "../hal/mic.h"
+#include "../hal/power.h"
+#include "../hal/inputs.h"
 
 using namespace theme;
 namespace ui {
@@ -215,6 +217,8 @@ static void homeRefreshChips() {
   bool linked = app::bridgeLinked();
   String lk = linked ? app::linkSummary() : String("OFFLINE");
   if (linked && blehid::connected() && app::linkSummary() != "BLE") lk += " +BLE";
+  if (power::enabled() && power::millivolts()) { char b[12]; snprintf(b, sizeof(b), "  %u%%", power::percent()); lk += b; }
+  if (g_settings.toggleRole == 0 && inputs::toggleState()) lk += "  " LV_SYMBOL_EYE_CLOSE;
   lv_label_set_text(lv_obj_get_child(s_linkChip, 1), lk.c_str());
   lv_obj_set_style_bg_color(s_linkDot, lv_color_hex(linked ? CO_PHOSPHOR : CO_AMBER), 0);
   bool live = app::dictating || app::capturing;
@@ -240,7 +244,7 @@ static const size_t kChunkChars = 220;
 static lv_obj_t* addChunkLabel(const app::Msg& m, const String& text, bool first) {
   lv_obj_t* l = lv_label_create(s_msgList);
   lv_obj_set_width(l, LV_PCT(100)); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_font(l, big() ? &lv_font_montserrat_16 : &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(l, g_settings.glance ? (big() ? &lv_font_montserrat_20 : &lv_font_montserrat_16) : (big() ? &lv_font_montserrat_16 : &lv_font_montserrat_14), 0);
   lv_obj_set_style_text_line_space(l, big() ? 3 : 2, 0);
   if (m.role == 0) { lv_obj_set_style_text_color(l, lv_color_hex(CO_CAERULEI2), 0); if (first) lv_obj_set_style_pad_top(l, big() ? 8 : 5, 0); }
   else if (m.role == 2) lv_obj_set_style_text_color(l, lv_color_hex(CO_RED), 0);
@@ -502,7 +506,13 @@ void onAppEvent(app::Ev ev, const char* arg) {
   switch (ev) {
     case app::Ev::Transcript: if (onHome) { homeRefreshTranscript(arg && !strcmp(arg, "delta")); homeRefreshChips(); } break;
     case app::Ev::Lists: if (onHome) homeRefreshChips(); else listsUpdated(); break;
-    case app::Ev::Status: if (onHome) homeRefreshChips(); break;
+    case app::Ev::Status:
+      if (arg && (!strcmp(arg, "enc+") || !strcmp(arg, "enc-"))) {   // rotary encoder scrolls whatever is scrollable on screen
+        lv_obj_t* scr = lv_scr_act(); lv_obj_t* target = onHome ? s_transcriptPanel : nullptr;
+        if (!target && scr) for (uint32_t i = 0; i < lv_obj_get_child_cnt(scr); i++) { lv_obj_t* c = lv_obj_get_child(scr, i); if (lv_obj_get_scroll_bottom(c) > 0 || lv_obj_get_scroll_top(c) > 0) { target = c; break; } }
+        if (target) lv_obj_scroll_by_bounded(target, 0, !strcmp(arg, "enc+") ? -(big() ? 48 : 32) : (big() ? 48 : 32), LV_ANIM_OFF);
+      } else if (onHome) homeRefreshChips();
+      break;
     case app::Ev::Link: if (onHome) { homeRefreshChips(); homeRefreshTranscript(false); } toast(!strcmp(arg, "linked") ? "Bridge linked" : "Bridge link lost", strcmp(arg, "linked") != 0); break;
     case app::Ev::Toast: toast(arg); break;
     case app::Ev::Error: toast(arg, true); if (onHome) homeRefreshChips(); break;

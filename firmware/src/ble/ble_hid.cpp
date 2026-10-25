@@ -122,6 +122,8 @@ bool started() { return s_started; }
 bool connected() { return s_connected; }
 String status() { if (!s_started) return "off"; return s_connected ? "connected" : "advertising"; }
 size_t pendingChars() { return s_queue.length(); }
+int bondCount() { return s_started ? NimBLEDevice::getNumBonds() : -1; }
+void forgetBonds() { if (s_started) NimBLEDevice::deleteAllBonds(); }
 
 static void sendKbd(uint8_t mods, uint8_t key) {
   if (!s_connected || !s_kbd) return;

@@ -29,7 +29,32 @@ Backlight(27) + blue LED(17) blinked; SD: no card inserted
 ESP32-D0WD-V3, 4 MB, no PSRAM. ST7796 320×480 on HSPI (readable=false, inverted panel), XPT2046 resistive touch
 sharing the LCD bus (CS 33, IRQ 36, 1.6 MHz), microSD on VSPI (CS 5), RGB LED R=22 G=16 B=17, speaker amp enable IO4
 (held low), speaker IO26. Probe: no I²C touch, XPT2046 idle reads 0/0/0 with IRQ high, SD card detected (32 GB).
-Mic pins in the profile (25/21/35) are unverified guesses for this board.
+Mic pins in the profile (25/21/35) are the defaults; all three are runtime settings (`micSck/micWs/micSd`) so you can
+move them to whatever the case routing needs without reflashing. The armored-case build puts the INMP441 on the right
+end wall: route VDD→3V3, GND→GND, L/R→GND, and pick three free GPIOs (SD must be an input-capable pin; 34–39 are
+input-only and ideal for SD). IO26 is the speaker DAC and IO4 the amp enable on this board, so keep the mic off those.
+
+## Case add-ons (CYD-4 armored case) — all optional, all configured from the Mac app › Hardware
+| Add-on | Firmware | Pins (settings keys) | Notes |
+|---|---|---|---|
+| INMP441 mic | `hal/mic` | `micSck`, `micWs`, `micSd` | re-inits on the next capture after a pin change |
+| EC11 rotary encoder | `hal/inputs` | `encA`, `encB`, `encSw` | internal pull-ups; 4 edges = 1 detent; turn scrolls the chat / any list, press = dictate |
+| Mini toggle switch | `hal/inputs` | `togglePin` + `toggleRole` | roles: 0 privacy (mic hard-off, eye icon in the status pill), 1 screen off, 2 glance mode |
+| Battery sense | `hal/power` | `batteryEnabled`, `batteryDivider` (×1000) | GPIO34 via a 2:1 divider by default; Li-ion curve → %, warns under 3.4 V; % shows in the status pill and `hello` |
+| Speaker chime | `hal/speaker` | `chime` 0/1/2 | LEDC tone on IO26 gated by IO4; 1 = permission/needs-input prompts, 2 = every alert |
+| BOOT / RST plungers | existing | — | BOOT tap/double/hold as before; RST is hardware |
+Avoid strapping pins (0, 2, 12, 15) for the encoder and toggle; prefer 16/17/21/22/25/27/32/33 (pull-ups needed).
+
+## Boot diagnostics
+`hal/diag` keeps uptime and min free heap in RTC memory and a 5-entry ring of `{reset reason, previous uptime,
+previous min heap}` in NVS. Every `hello` carries `reset`, `up` and the newest three ring entries; the bridge logs
+"device booted Ns ago: reset=… previous run …" (warns on panic/watchdog/brownout) or "device relinked after Ns up".
+That is how a crash loop off-USB gets diagnosed from the bridge log later.
+
+## Serial DTR/RTS and the CH340 (measured 2026-10-24)
+Opening the port with DTR=0/RTS=0 resets the ESP32 (reads as a power-on reset). DTR=0/RTS=1 **holds it in reset**
+for as long as the port is open. DTR=1/RTS=1 and DTR=1/RTS=0 leave it running. The bridge opens with both asserted
+and sends `hello.req`, so plugging into a running device links without a reboot; it re-asserts both before close.
 
 ## Microphone (I²S, P3 header)
 | INMP441 pin | CYD P3 |

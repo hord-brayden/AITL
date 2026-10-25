@@ -106,8 +106,20 @@ One build flag per board (`firmware/boards/`): `cyd28c` (this unit: ILI9341 + CS
 `tools/flash.sh cyd28r` flashes the resistive 2.8"; the first-boot wizard calibrates any of them (swap, invert,
 scale, offset). Verified pinout and quirks: `docs/HARDWARE.md`.
 
+## Wi-Fi networks, phone pushes, case hardware
+- **Networks:** the device remembers up to 8 Wi-Fi networks and joins the strongest one it can see. Add them from the
+  Mac app (*Wi-Fi networks* panel, password goes over USB only), `aitl wifi add "SSID"` (hidden prompt), or on the
+  device under Setup › Connection › *Add network*. `aitl wifi scan` lists what the device sees; tap a saved network on
+  the device to switch or forget it. Bluetooth pairings are listed there too, with *Forget all pairings* in the app.
+- **Phone pushes:** install the ntfy app, subscribe to a topic, enter it in the app's *Phone push* panel. Permission
+  prompts arrive with Allow/Deny buttons when Tailscale is running on the Mac (see `docs/SECURITY.md`).
+- **Case add-ons:** rotary encoder, toggle switch (privacy / screen / glance), battery gauge, speaker chimes and the
+  mic pins are all configured in the app's *Hardware* panel; nothing needs a reflash. `docs/HARDWARE.md` has the table.
+- **Boot diagnostics:** the bridge log says why the device last reset and how long it ran (`device booted … reset=…`).
+
 ## Device microphone (optional)
-Solder an INMP441 to the P3 header: VDD→3V3, GND→GND, SCK→IO22, WS→IO21, SD→IO35, L/R→GND. Then on the device
+Solder an INMP441 to the P3 header: VDD→3V3, GND→GND, SCK→IO22, WS→IO21, SD→IO35, L/R→GND (pins are changeable in
+the app's Hardware panel for the 4" case build). Then on the device
 Setup › Dictation › Microphone = *Device mic*, and check Setup › *Mic test* (a live level bar). Transcription runs on
 the Mac: `pip install mlx-whisper` for free local Whisper, otherwise the bridge uses Gemini. Hold the BOOT button to
 talk, release to send; or tap TALK and let the silence detector stop it.
@@ -117,7 +129,11 @@ talk, release to send; or tap TALK and let the silence detector stop it.
 - V-B: OTA updates over the pinned Wi-Fi link; partition table already reserves the space decision.
 - V-C: per-chat system prompts and "personas" selectable from the device; tool use (calendar, notes) through the bridge.
 - V-D: Windows/Linux bridge back-ends for `mac.py` (the protocol is OS-agnostic).
-- V-E: printed case with the BOOT button exposed as the push-to-talk key.
+- V-E: printed case with the BOOT button exposed as the push-to-talk key (CYD-4 armored case: in progress, hardware hooks landed).
+- V-F: Meta Muse Spark — assessed 2026-10-24. The public "Muse gadget SDK" is a token-gated ESP-IDF v6 firmware for Meta's
+  own glasses companion flow with no text/chat API, so it cannot be a provider behind the bridge. If it becomes worth
+  exploring, it belongs on a second CYD as its own firmware (side branch), not in this codebase. Muse stays a
+  placeholder entry in `openai_compatible` until an endpoint exists.
 
 *Decision support, not decision authority.* — UNCLASSIFIED // OPEN SOURCE
 

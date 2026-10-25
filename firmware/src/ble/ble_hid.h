@@ -15,6 +15,8 @@ namespace blehid {
   void consumer(uint16_t usage);           // 0xE9 vol+, 0xEA vol-, 0xCD play/pause, 0xE2 mute
   void tick();
   size_t pendingChars();
+  int bondCount();
+  void forgetBonds();
   // Nordic UART Service link (bridge protocol over BLE). Enabled with g_settings.bleLink; same NDJSON frames.
   typedef void (*LineCb)(const char* line, size_t len);
   void setLineHandler(LineCb cb);

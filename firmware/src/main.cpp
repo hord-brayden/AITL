@@ -10,9 +10,12 @@
 #include "hal/sdcard.h"
 #include "ui/ui.h"
 #include "link/link.h"
+#include "hal/diag.h"
 
 void setup() {
+  diag::begin();
   settingsLoad();
+  if (g_settings.cpuMhz == 160) setCpuFrequencyMhz(160);
   Serial.setRxBufferSize(g_settings.wifiEnabled ? 4096 : 16384);   // list replies arrive in bursts while LVGL is busy redrawing (must precede begin)
   Serial.begin(SERIAL_BAUD);
   ledBegin();

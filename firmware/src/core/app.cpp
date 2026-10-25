@@ -9,6 +9,10 @@
 #include "../hal/sdcard.h"
 #include "../hal/display.h"
 #include "../hal/mic.h"
+#include "../hal/inputs.h"
+#include "../hal/power.h"
+#include "../hal/speaker.h"
+#include "../hal/diag.h"
 #include <mbedtls/base64.h>
 
 namespace app {
@@ -19,6 +23,7 @@ static uint32_t s_captureStart = 0;
 String pairFingerprint, pairCode, pairName;
 static String s_pendingCa, s_pendingToken;
 static UiCb s_ui = nullptr;
+static bridge::Transport s_scanReplyTo = bridge::Transport::None;
 static std::vector<Msg> s_msgs; static String s_lastUser, s_lastReply;
 static uint32_t s_lastHelloTx = 0, s_lastRxSerial = 0, s_lastRxWifi = 0, s_lastRxBle = 0, s_lastPing = 0;
 static bool s_wsWasUp = false;
@@ -64,7 +69,8 @@ static void sendHello(bridge::Transport via = bridge::Transport::None) {
   JsonArray caps = d.createNestedArray("caps"); caps.add("hid"); caps.add("ble"); caps.add("sd"); caps.add("wifi"); caps.add("mic"); d["board"] = AITL_BOARD_NAME;
   if (g_settings.modelId[0]) d["model"] = g_settings.modelId;
   d["chat"] = currentChatId.length() ? currentChatId : String(g_settings.lastChat);
-  d["heap"] = ESP.getFreeHeap();
+  d["heap"] = ESP.getFreeHeap(); d["up"] = millis() / 1000; d["reset"] = diag::lastReason(); diag::fill(d.createNestedArray("diag"));
+  if (power::enabled()) d["bat"] = power::percent();
   if (via == bridge::Transport::None) bridge::send(d); else bridge::sendVia(via, d);
   s_lastHelloTx = millis();
 }
@@ -155,6 +161,7 @@ void captureStop(bool discard) {
   if (!discard) emit(Ev::Toast, "Transcribing...");
 }
 void dictation(const char* op) {
+  if (g_settings.toggleRole == 0 && inputs::toggleState()) { emit(Ev::Error, "Privacy switch is on"); return; }
   if (g_settings.dictSource == 1) {                      // device microphone
     bool start = !strcmp(op, "start") ? true : !strcmp(op, "stop") ? false : !capturing;
     if (start) captureStart(); else captureStop(false);
@@ -240,7 +247,7 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     emit(Ev::Status);
   } else if (!strcmp(t, "ui.toast")) { emit(Ev::Toast, d["msg"] | "");
   } else if (!strcmp(t, "prov.wifi")) {
-    strlcpy(g_settings.wifiSsid, d["ssid"] | "", sizeof(g_settings.wifiSsid)); strlcpy(g_settings.wifiPass, d["pass"] | "", sizeof(g_settings.wifiPass));
+    bridge::wifiAdd(d["ssid"] | "", d["pass"] | "", d["prio"] | 0);
     g_settings.wifiEnabled = true; settingsSave(); emit(Ev::Provisioned, "wifi"); DynamicJsonDocument r(128); r["t"] = "prov.ok"; r["what"] = "wifi"; bridge::sendVia(from, r); delay(400); ESP.restart();
   } else if (!strcmp(t, "prov.bridge")) {
     strlcpy(g_settings.bridgeHost, d["host"] | "", sizeof(g_settings.bridgeHost)); g_settings.bridgePort = d["port"] | BRIDGE_WS_PORT_DEFAULT;
@@ -257,6 +264,18 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     if (!*txt) { ledSetMode(LedMode::Error); emit(Ev::Error, *note ? note : "Nothing transcribed"); }
     else if (!strcmp(d["target"] | "ask", "type")) { ledSetMode(LedMode::Done); emit(Ev::Toast, "Typed into Mac"); if (g_settings.hidTarget == 1 && blehid::connected()) blehid::typeText(txt); }
     else { s_lastUser = txt; pushMsg(0, txt); s_lastReply = ""; hasReply = false; streaming = true; ledSetMode(LedMode::Thinking); emit(Ev::Transcript, "reset"); }
+  } else if (!strcmp(t, "hello.req")) {
+    sendHello(from);
+  } else if (!strcmp(t, "wifi.list") || !strcmp(t, "wifi.remove") || !strcmp(t, "wifi.use") || !strcmp(t, "wifi.add")) {
+    if (!strcmp(t, "wifi.remove")) bridge::wifiRemove(d["ssid"] | "");
+    else if (!strcmp(t, "wifi.use")) bridge::wifiUse(d["ssid"] | "");
+    else if (!strcmp(t, "wifi.add")) bridge::wifiAdd(d["ssid"] | "", d["pass"] | "", d["prio"] | 0);
+    DynamicJsonDocument r(2048); r["t"] = "wifi.networks"; bridge::wifiNetworks(r.createNestedArray("list")); r["current"] = g_settings.wifiSsid; r["enabled"] = g_settings.wifiEnabled; bridge::sendVia(from, r);
+    emit(Ev::Lists);
+  } else if (!strcmp(t, "wifi.scan")) {
+    bridge::wifiScanRequest(); s_scanReplyTo = from;
+  } else if (!strcmp(t, "ble.forget")) {
+    blehid::forgetBonds(); DynamicJsonDocument r(128); r["t"] = "ble.bonds"; r["count"] = blehid::bondCount(); bridge::sendVia(from, r); emit(Ev::Toast, "Bluetooth bonds forgotten");
   } else if (!strcmp(t, "settings.get")) {       // full settings dump for the Mac app (never includes the Wi-Fi password or the token)
     DynamicJsonDocument r(1024);
     r["t"] = "settings.dump"; r["board"] = AITL_BOARD_NAME; r["fw"] = AITL_FW_VERSION; r["id"] = deviceId(); r["heap"] = ESP.getFreeHeap();
@@ -267,6 +286,10 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     r["bleEnabled"] = g_settings.bleEnabled; r["bleLink"] = g_settings.bleLink; r["bleConnected"] = blehid::connected(); r["hidTarget"] = g_settings.hidTarget; r["dictShortcut"] = g_settings.dictShortcut;
     r["dictSource"] = g_settings.dictSource; r["dictTarget"] = g_settings.dictTarget; r["micGain"] = g_settings.micGain; r["model"] = currentModel; r["setupDone"] = g_settings.setupDone;
     r["wifiIp"] = bridge::ipAddress(); r["wifiStatus"] = bridge::wifiStatus(); r["bridgeStatus"] = bridge::bridgeStatus(); r["sd"] = sdInfo();
+    r["micSck"] = g_settings.micSck; r["micWs"] = g_settings.micWs; r["micSd"] = g_settings.micSd; r["encA"] = g_settings.encA; r["encB"] = g_settings.encB; r["encSw"] = g_settings.encSw;
+    r["togglePin"] = g_settings.togglePin; r["toggleRole"] = g_settings.toggleRole; r["batteryEnabled"] = g_settings.batteryEnabled; r["batteryDivider"] = g_settings.batteryDivider;
+    r["chime"] = g_settings.chime; r["glance"] = g_settings.glance; r["cpuMhz"] = g_settings.cpuMhz; r["bleBonds"] = blehid::bondCount(); r["batteryMv"] = power::millivolts(); r["batteryPct"] = power::percent();
+    r["reset"] = diag::lastReason(); bridge::wifiNetworks(r.createNestedArray("wifiNetworks"));
     bridge::sendVia(from, r);
   } else if (!strcmp(t, "settings.set")) {               // bridge-side `aitl set key value` (USB/BLE/Wi-Fi, authenticated link)
     const char* k = d["key"] | ""; JsonVariant v = d["value"]; bool ok = true;
@@ -289,6 +312,13 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     else if (!strcmp(k, "sdLog")) { g_settings.sdLog = v.as<bool>(); }
     else if (!strcmp(k, "dictShortcut")) { g_settings.dictShortcut = constrain(v.as<int>(), 0, 3); }
     else if (!strcmp(k, "calibrate")) { emit(Ev::Toast, "Touch calibration requested from the Mac"); /* UI opens it via Ev */ }
+    else if (!strcmp(k, "micSck")) g_settings.micSck = v.as<int>(); else if (!strcmp(k, "micWs")) g_settings.micWs = v.as<int>(); else if (!strcmp(k, "micSd")) g_settings.micSd = v.as<int>();
+    else if (!strcmp(k, "encA")) { g_settings.encA = v.as<int>(); inputs::applyPins(); } else if (!strcmp(k, "encB")) { g_settings.encB = v.as<int>(); inputs::applyPins(); } else if (!strcmp(k, "encSw")) { g_settings.encSw = v.as<int>(); inputs::applyPins(); }
+    else if (!strcmp(k, "togglePin")) { g_settings.togglePin = v.as<int>(); inputs::applyPins(); } else if (!strcmp(k, "toggleRole")) g_settings.toggleRole = constrain(v.as<int>(), 0, 2);
+    else if (!strcmp(k, "batteryEnabled")) { g_settings.batteryEnabled = v.as<bool>(); power::begin(); } else if (!strcmp(k, "batteryDivider")) g_settings.batteryDivider = constrain(v.as<int>(), 1000, 4000);
+    else if (!strcmp(k, "chime")) { g_settings.chime = constrain(v.as<int>(), 0, 2); if (g_settings.chime) speaker::chime(2); }
+    else if (!strcmp(k, "glance")) { g_settings.glance = v.as<bool>(); emit(Ev::Toast, "Glance mode applies on the next screen"); }
+    else if (!strcmp(k, "cpuMhz")) { g_settings.cpuMhz = (v.as<int>() == 160) ? 160 : 240; setCpuFrequencyMhz(g_settings.cpuMhz); }
     else if (!strcmp(k, "reboot")) { DynamicJsonDocument r(96); r["t"] = "settings.ack"; r["key"] = k; r["ok"] = true; bridge::sendVia(from, r); delay(300); ESP.restart(); }
     else if (!strcmp(k, "factoryReset")) { settingsReset(); bridge::storeBridgeCert(""); delay(300); ESP.restart(); }
     else if (!strcmp(k, "bench")) {   // text-rendering microbenchmark, results in the log
@@ -326,6 +356,7 @@ static void onMessage(JsonDocument& d, bridge::Transport from) {
     alert.id = (const char*)(d["id"] | ""); alert.kind = (const char*)(d["kind"] | "notify"); alert.title = (const char*)(d["title"] | "");
     alert.text = (const char*)(d["text"] | ""); alert.project = (const char*)(d["project"] | ""); alert.session = (const char*)(d["session"] | ""); alert.twoWay = alert.kind == "permission";
     inbox.insert(inbox.begin(), alert); if (inbox.size() > 30) inbox.pop_back(); if (inboxUnread < 99) inboxUnread++;
+    if (g_settings.chime == 2 || (g_settings.chime == 1 && (alert.kind == "permission" || alert.kind == "notify"))) speaker::chime(alert.kind == "permission" || alert.kind == "notify" ? 1 : 2);
     if (alert.kind == "notice") {   // macOS notification: inbox + toast, never a modal card
       String m = alert.title; if (alert.text.length()) { m += ": "; m += alert.text.substring(0, 90); }
       alert = Alert(); emit(Ev::Inbox); emit(Ev::Toast, m.c_str()); ledSetMode(LedMode::Done); if (!displayIsAwake()) displayWake();
@@ -348,6 +379,7 @@ void begin() {
   // Wi-Fi wins when both are enabled; BLE stays off until Wi-Fi is turned off again.
   if (g_settings.bleEnabled && !g_settings.wifiEnabled) blehid::begin();
   pinMode(PIN_BTN_BOOT, INPUT_PULLUP);
+  inputs::begin(); power::begin(); speaker::begin();
 }
 
 void tick() {
@@ -371,7 +403,20 @@ void tick() {
     if (bridge::active() == bridge::Transport::WiFi && now - s_lastRxWifi > 20000) { bridge::markHello(bridge::Transport::WiFi, false); emit(Ev::Link, "lost"); }
     if (bridge::active() == bridge::Transport::Ble && now - s_lastRxBle > 25000) { bridge::markHello(bridge::Transport::Ble, false); emit(Ev::Link, "lost"); }
   }
-  mic::tick();
+  mic::tick(); power::tick(); speaker::tick(); diag::tick();
+  { DynamicJsonDocument sr(1536); JsonArray a = sr.createNestedArray("list"); if (bridge::wifiScanResults(a)) { sr["t"] = "wifi.scan"; if (s_scanReplyTo != bridge::Transport::None) bridge::sendVia(s_scanReplyTo, sr); else bridge::send(sr); emit(Ev::Lists); } }
+  switch (inputs::poll()) {
+    case inputs::Ev::EncCw: emit(Ev::Status, "enc+"); break;
+    case inputs::Ev::EncCcw: emit(Ev::Status, "enc-"); break;
+    case inputs::Ev::EncPress: dictation("toggle"); break;
+    case inputs::Ev::ToggleOn: case inputs::Ev::ToggleOff: {
+      bool on = inputs::toggleState();
+      if (g_settings.toggleRole == 0) { if (on && (dictating || capturing)) dictation("stop"); emit(Ev::Toast, on ? "Privacy on: dictation disabled" : "Privacy off"); }
+      else if (g_settings.toggleRole == 1) { if (on) displaySleep(); else displayWake(); }
+      else { g_settings.glance = on; settingsSave(); emit(Ev::Toast, on ? "Glance mode" : "Normal mode"); }
+      emit(Ev::Status); break; }
+    default: break;
+  }
   if (capturing) {
     uint32_t dur = now - s_captureStart;
     if ((mic::heardSpeech() && mic::silenceMs() > 1600 && dur > 1500) || dur > 90000) captureStop(false);   // VAD auto-stop

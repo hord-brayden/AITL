@@ -45,7 +45,8 @@ bool begin() {
   cfg.dma_buf_count = 6; cfg.dma_buf_len = MIC_FRAME_SAMPLES;
   cfg.use_apll = false; cfg.tx_desc_auto_clear = false; cfg.fixed_mclk = 0;
   if (i2s_driver_install(I2S_NUM_0, &cfg, 0, nullptr) != ESP_OK) return false;
-  i2s_pin_config_t pins = {}; pins.bck_io_num = PIN_MIC_SCK; pins.ws_io_num = PIN_MIC_WS; pins.data_out_num = I2S_PIN_NO_CHANGE; pins.data_in_num = PIN_MIC_SD;
+  if (g_settings.micSck < 0 || g_settings.micWs < 0 || g_settings.micSd < 0) return false;   // not fitted
+  i2s_pin_config_t pins = {}; pins.bck_io_num = g_settings.micSck; pins.ws_io_num = g_settings.micWs; pins.data_out_num = I2S_PIN_NO_CHANGE; pins.data_in_num = g_settings.micSd;
   if (i2s_set_pin(I2S_NUM_0, &pins) != ESP_OK) { i2s_driver_uninstall(I2S_NUM_0); return false; }
   i2s_zero_dma_buffer(I2S_NUM_0);
   s_started = true; return true;

@@ -43,6 +43,12 @@ class Shared:
         self.dict_state: dict[str, Any] = {"dictating": False}
         self.hid_notified = False
         self.device_settings: dict[str, dict[str, Any]] = {}
+        self.device_networks: dict[str, dict[str, Any]] = {}
+        self.device_scan: dict[str, list] = {}
+        self.device_diag: dict[str, dict[str, Any]] = {}
+        self.ntfy = None
+        self.remote = None
+        self.remote_task = None
         self.session_state: dict[str, dict[str, Any]] = {}     # Claude Code session id -> {state, at, project, note}
         self.usage_today: dict[str, Any] = {"day": time.strftime("%Y-%m-%d"), "turns": 0, "in": 0, "out": 0, "cost": 0.0}
         self.sessions: set["DeviceSession"] = set()
@@ -106,6 +112,8 @@ class Shared:
                             card = {"t": "alert", "id": secrets.token_hex(3), "kind": "modal" if cfg.get("modal") else "notice",
                                     "title": title[:60], "text": text or "(no text)", "project": n["time"], "session": "", "actions": ["OK"]}
                             await self.broadcast(card)
+                            if self.ntfy and self.ntfy.wants("notice"):
+                                await self.ntfy.send(title[:60], text or "(no text)", kind="notice")
                     elif not warned:
                         warned = True; log.warning("notifications: %s", why)
             except Exception as e:  # noqa: BLE001
@@ -125,6 +133,25 @@ class Shared:
                 log.debug("now playing: %s", e)
             await asyncio.sleep(4)
 
+    async def ntfy_apply(self) -> None:
+        """(Re)build the ntfy forwarder from config and start/stop the remote Allow/Deny server to match."""
+        from .ntfy import Ntfy, RemoteServer
+        self.ntfy = Ntfy(self.cfg.get("ntfy", {}))
+        if self.hooks:
+            self.hooks.ntfy = self.ntfy
+        if self.remote_task:
+            self.remote_task.cancel(); self.remote_task = None; self.remote = None
+        if self.ntfy.enabled:
+            self.remote = RemoteServer(self.hooks.reply if self.hooks else (lambda a, b: False), self.cfg.get("ntfy", {}), self.ntfy)
+            async def _answered(aid: str, action: str) -> None:
+                await self.broadcast({"t": "alert.clear", "id": aid}); log.info("permission %s -> %s (from ntfy)", aid, action)
+            self.remote.on_reply = _answered
+            self.remote_task = asyncio.create_task(self.remote.run())
+            log.info("ntfy: forwarding %s to %s/%s", ", ".join(sorted(self.ntfy.events)), self.ntfy.url, self.ntfy.topic)
+        elif not getattr(self, "_ntfy_off_logged", False):
+            self._ntfy_off_logged = True
+            log.info("ntfy: off (set a topic in the app or config.toml [ntfy])")
+
     async def admin(self, op: str, data: dict[str, Any]) -> dict[str, Any]:
         """Loopback admin ops from `aitl set` / `aitl status`."""
         if op == "probe":
@@ -141,10 +168,11 @@ class Shared:
                 return {"ok": False, "error": "device did not answer"}
             from .security import _local_ips, tailscale_ip, BRIDGE_DNS
             from .notifications import accessible as nc_ok
-            return {"ok": True, "devices": self.device_settings, "models": self.router.as_wire(),
+            return {"ok": True, "devices": self.device_settings, "diag": self.device_diag, "models": self.router.as_wire(),
                     "bridge": {"name": self.bridge_name, "wifi_mode": self.cfg["bridge"].get("wifi_mode", "signed"), "ws_port": self.cfg["bridge"]["ws_port"],
                                "hosts": {"mdns": BRIDGE_DNS, "lan": (_local_ips() or [""])[0], "tailscale": tailscale_ip()},
-                               "notifications": {"enabled": bool(self.cfg.get("notifications", {}).get("enabled", True)), "accessible": nc_ok()[0], "why": nc_ok()[1]}}}
+                               "notifications": {"enabled": bool(self.cfg.get("notifications", {}).get("enabled", True)), "accessible": nc_ok()[0], "why": nc_ok()[1]},
+                               "ntfy": await self.admin("ntfy_status", {})}}
         if op == "provision":
             usb = [x for x in self.sessions if x.transport == "serial" and x.authenticated]
             if not usb:
@@ -181,6 +209,72 @@ class Shared:
             self.pairing.open(int(data.get("seconds", 180)))
             from .security import cert_fingerprint
             return {"ok": True, "fingerprint": cert_fingerprint(), "seconds": int(data.get("seconds", 180))}
+        if op in ("wifi_list", "wifi_add", "wifi_remove", "wifi_use"):
+            msg = {"wifi_list": {"t": "wifi.list"}, "wifi_add": {"t": "wifi.add", "ssid": data.get("ssid", ""), "pass": data.get("password", ""), "prio": int(data.get("prio", 0))},
+                   "wifi_remove": {"t": "wifi.remove", "ssid": data.get("ssid", "")}, "wifi_use": {"t": "wifi.use", "ssid": data.get("ssid", "")}}[op]
+            if op == "wifi_add":   # passwords only travel over the cable
+                usb = [x for x in self.sessions if x.transport == "serial" and x.authenticated]
+                if not usb:
+                    return {"ok": False, "error": "adding a network needs the device on USB"}
+                fut = asyncio.get_running_loop().create_future(); self.pending_settings["__wifi__"] = fut
+                for x in usb:
+                    await x.send(msg)
+            else:
+                fut = asyncio.get_running_loop().create_future(); self.pending_settings["__wifi__"] = fut
+                if await self.broadcast(msg) == 0:
+                    self.pending_settings.pop("__wifi__", None); return {"ok": False, "error": "no device linked"}
+            try:
+                await asyncio.wait_for(fut, 6)
+            except asyncio.TimeoutError:
+                self.pending_settings.pop("__wifi__", None); return {"ok": False, "error": "device did not answer"}
+            nets = next(iter(self.device_networks.values()), {})
+            return {"ok": True, **nets}
+        if op == "wifi_scan":
+            fut = asyncio.get_running_loop().create_future(); self.pending_settings["__scan__"] = fut
+            if await self.broadcast({"t": "wifi.scan"}) == 0:
+                self.pending_settings.pop("__scan__", None); return {"ok": False, "error": "no device linked"}
+            try:
+                await asyncio.wait_for(fut, 12)
+            except asyncio.TimeoutError:
+                self.pending_settings.pop("__scan__", None); return {"ok": False, "error": "scan timed out"}
+            return {"ok": True, "list": next(iter(self.device_scan.values()), [])}
+        if op == "ble_forget":
+            fut = asyncio.get_running_loop().create_future(); self.pending_settings["__bonds__"] = fut
+            if await self.broadcast({"t": "ble.forget"}) == 0:
+                self.pending_settings.pop("__bonds__", None); return {"ok": False, "error": "no device linked"}
+            try:
+                count = await asyncio.wait_for(fut, 5)
+            except asyncio.TimeoutError:
+                self.pending_settings.pop("__bonds__", None); return {"ok": False, "error": "device did not answer"}
+            return {"ok": True, "bonds": count}
+        if op == "config_set":            # {"section": "ntfy", "key": "topic", "value": "..."}; persisted to config.toml
+            from . import config as _config
+            sec, key, value = str(data.get("section", "")), str(data.get("key", "")), data.get("value")
+            if sec not in ("ntfy", "notifications", "bridge", "hid", "buttons", "stt") or not key:
+                return {"ok": False, "error": "unknown config key"}
+            self.cfg.setdefault(sec, {})[key] = value
+            _config.save(self.cfg)
+            if sec == "ntfy":
+                await self.ntfy_apply()
+            return {"ok": True}
+        if op == "key_set":               # {"provider": "ntfy", "value": "..."} -> Keychain; never logged
+            from . import secrets as _sec
+            prov, value = str(data.get("provider", "")), str(data.get("value", ""))
+            if not prov:
+                return {"ok": False, "error": "provider required"}
+            ok = _sec.delete(prov) if not value else _sec.set_key(prov, value)
+            if prov == "ntfy":
+                await self.ntfy_apply()
+            return {"ok": bool(ok)}
+        if op == "ntfy_status":
+            n = self.ntfy
+            return {"ok": True, "enabled": bool(n and n.enabled), "url": n.url if n else "", "topic": n.topic if n else "", "events": sorted(n.events) if n else [],
+                    "actions": n.action_base if n else "", "token": bool(n and n.token)}
+        if op == "ntfy_test":
+            if not self.ntfy or not self.ntfy.enabled:
+                return {"ok": False, "error": "set [ntfy] topic in config (or in the app) first"}
+            ok = await self.ntfy.send("AITL test", str(data.get("text", "If you can read this on your phone, ntfy forwarding works.")), kind="notify")
+            return {"ok": ok, "error": None if ok else "ntfy rejected the push (check url/topic/token in the bridge log)"}
         if op == "status":
             return {"devices": [{"id": s.device_id, "transport": s.transport, "model": s.model, "fw": s.fw} for s in self.sessions if s.authenticated and s.device_id]}
         if op == "set":
@@ -261,6 +355,7 @@ class DeviceSession:
             "overview": self.on_overview,
             "audio.start": self.on_audio_start, "audio.chunk": self.on_audio_chunk, "audio.stop": self.on_audio_stop,
             "audio.cancel": self.on_audio_cancel, "settings.ack": self.on_settings_ack, "settings.dump": self.on_settings_dump,
+            "wifi.networks": self.on_wifi_networks, "wifi.scan": self.on_wifi_scan, "ble.bonds": self.on_ble_bonds,
         }.get(t)
         if handler:
             await handler(m)
@@ -291,6 +386,19 @@ class DeviceSession:
             ack["models"] = ack["models"][:24]; ack["chats"] = ack["chats"][:12]
         if heap:
             log.info("device heap %d KB free", heap // 1024)
+        if m.get("reset"):
+            ring = m.get("diag") or []              # newest first: ring[0] = this boot's reason + the previous run's uptime/min-heap
+            prev = ring[0] if ring else {}
+            up = int(m.get("up") or 0)
+            if up < 20:
+                log.info("device booted %ds ago: reset=%s%s%s", up, m["reset"],
+                         f", previous run {int(prev.get('up', 0))}s, min heap {int(prev.get('minheap', 0)) // 1024} KB" if prev else "",
+                         f", battery {m['bat']}%" if m.get("bat") is not None else "")
+                if m["reset"] in ("panic", "int-wdt", "task-wdt", "wdt", "brownout"):
+                    log.warning("device last reset was abnormal: %s (ring: %s)", m["reset"], ring)
+            else:
+                log.info("device relinked after %ds up (no reboot)%s", up, f", battery {m['bat']}%" if m.get("bat") is not None else "")
+            self.s.device_diag[self.device_id] = {"reset": m["reset"], "ring": ring, "bat": m.get("bat"), "up": up}
         await self.send(ack)
         log.info("device %s fw %s linked via %s (model %s)", self.device_id, self.fw, self.transport, self.model)
         app = await mac.frontmost_app()
@@ -623,6 +731,23 @@ class DeviceSession:
     async def push_now_playing(self, force: bool = False) -> None:
         np = await mac.now_playing()
         await self.send({"t": "np", **np})
+
+    async def on_wifi_networks(self, m: dict[str, Any]) -> None:
+        self.s.device_networks[self.device_id] = {k: v for k, v in m.items() if k != "t"}
+        fut = self.s.pending_settings.pop("__wifi__", None)
+        if fut and not fut.done():
+            fut.set_result(True)
+
+    async def on_wifi_scan(self, m: dict[str, Any]) -> None:
+        self.s.device_scan[self.device_id] = m.get("list") or []
+        fut = self.s.pending_settings.pop("__scan__", None)
+        if fut and not fut.done():
+            fut.set_result(True)
+
+    async def on_ble_bonds(self, m: dict[str, Any]) -> None:
+        fut = self.s.pending_settings.pop("__bonds__", None)
+        if fut and not fut.done():
+            fut.set_result(int(m.get("count", -1)))
 
     async def on_prov_ok(self, m: dict[str, Any]) -> None:
         log.info("device confirmed provisioning: %s", m.get("what"))

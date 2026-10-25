@@ -31,6 +31,8 @@ class HookServer:
         self.state: dict[str, dict[str, Any]] | None = None   # shared.session_state, attached by the CLI
         self.admin = None                              # async (op, data) -> dict, attached by the CLI
         self.queued: list[dict[str, Any]] = []      # non-permission cards held while a permission is on screen
+        self.ntfy = None                               # ntfy.Ntfy, attached by the CLI
+        self.meta: dict[str, dict[str, Any]] = {}      # alert id -> {tool, project} for log lines
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -71,6 +73,8 @@ class HookServer:
                 status, payload = 200, {"terminals": {k: {kk: vv for kk, vv in v.items() if kk != "at"} for k, v in self.terminals.items()}}
             elif method == "POST" and path == "/admin/pair_open" and self.admin:
                 status, payload = 200, await self.admin("pair_open", json.loads(body or b"{}"))
+            elif path.startswith("/admin/") and self.admin and path[len("/admin/"):] in ("wifi_list", "wifi_add", "wifi_remove", "wifi_use", "wifi_scan", "ble_forget", "ntfy_test", "ntfy_status", "config_set", "key_set"):
+                status, payload = 200, await self.admin(path[len("/admin/"):], json.loads(body or b"{}") if body else {})
             out = json.dumps(payload).encode()
             writer.write(b"HTTP/1.1 %d OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (status, len(out)) + out)
             await writer.drain()
@@ -103,7 +107,10 @@ class HookServer:
             n = await self.broadcast({"t": "alert", "id": aid, "kind": "permission", "title": f"{tool} needs approval",
                                       "text": str(detail)[:400], "project": project, "session": sid,
                                       "actions": ["Allow", "Deny"]})
-            if n == 0:
+            pushed = False
+            if self.ntfy and self.ntfy.wants("permission"):
+                pushed = await self.ntfy.send(f"{tool} needs approval • {project or 'session'}", str(detail)[:1000], kind="permission", alert_id=aid)
+            if n == 0 and not pushed:
                 self.pending.pop(aid, None)
                 return {}
             try:
@@ -127,6 +134,8 @@ class HookServer:
                 return {}                                   # already shown as a permission alert
             card = {"t": "alert", "id": secrets.token_hex(3), "kind": "notify", "title": f"Claude Code • {project or 'session'}",
                     "text": msg or kind, "project": project, "session": sid, "actions": ["OK"]}
+            if self.ntfy and self.ntfy.wants("notify"):
+                await self.ntfy.send(card["title"], card["text"], kind="notify")
             if self.pending:
                 self.queued.append(card)                    # never cover a permission card
             else:
@@ -136,6 +145,8 @@ class HookServer:
             last = str(d.get("last_assistant_message") or "").strip()[:400]
             card = {"t": "alert", "id": secrets.token_hex(3), "kind": "done", "title": f"Finished • {project or 'session'}",
                     "text": last or "Claude finished its turn.", "project": project, "session": sid, "actions": ["OK"]}
+            if self.ntfy and self.ntfy.wants("done"):
+                await self.ntfy.send(card["title"], card["text"], kind="done")
             if self.pending:
                 self.queued.append(card)
             else:

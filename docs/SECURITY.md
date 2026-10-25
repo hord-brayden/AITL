@@ -44,6 +44,15 @@ action that touches your Mac is attributable to a paired device.
   allow-listed keys, toggle dictation, read the clipboard through the predefined actions, and adjust volume.
 - Clipboard actions send clipboard contents to the selected provider. Pick a local Ollama model for sensitive text.
 
+## Phone push (ntfy) and remote Allow/Deny
+`[ntfy]` in config.toml (or the app's *Phone push* panel) forwards permission prompts, needs-input notices, finished
+turns and (optionally) relayed macOS notifications to an ntfy topic. Treat the topic name as a password; an access
+token for a protected topic lives in the Keychain (`aitl keys set ntfy`). Permission pushes carry Allow/Deny buttons
+that hit a small HTTP server the bridge binds to **this Mac's Tailscale IP only** (never 0.0.0.0) on port 7779, with a
+per-install secret (`~/.config/aitl/remote_secret`, 0600) in every link; a wrong secret is a 403 and an expired prompt
+a 410. Without Tailscale the pushes still arrive but have no buttons. Deny from the device or the phone wins over the
+terminal only inside the hook timeout; after that the terminal prompt is authoritative.
+
 ## Known limitations (be honest with yourself)
 - NVS on the classic ESP32 is not encrypted unless you enable flash encryption; a lost device leaks its Wi-Fi
   password and its bridge token (not any API key). Revoke the token; it is useless without LAN access anyway.

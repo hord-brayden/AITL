@@ -192,6 +192,7 @@ TouchRaw displayReadTouchRaw() { return s_lastRaw; }
 void displaySetCalibrating(bool on) { s_calibrating = on; }
 bool displayIsAwake() { return s_power == Power::On; }
 void displayApplyBrightness() { if (s_power == Power::On) tft.setBrightness(g_settings.brightness); }
+void displaySleep() { s_power = Power::Off; tft.setBrightness(0); }
 void displayWake() { s_power = Power::On; tft.setBrightness(g_settings.brightness); lv_disp_trig_activity(nullptr); }
 
 void displayPowerTick() {

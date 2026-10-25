@@ -8,6 +8,7 @@ void displayBegin();
 void displayApplyPanel();        // re-init panel with current invert/bgr/rotation settings
 void displayApplyBrightness();
 void displayWake();
+void displaySleep();
 void displayPowerTick();
 bool displayIsAwake();
 TouchRaw displayReadTouchRaw();  // last sample, uncalibrated (used by the calibration wizard)

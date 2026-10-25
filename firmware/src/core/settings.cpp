@@ -33,6 +33,11 @@ void settingsLoad() {
   g_settings.micGain       = prefs.getUChar("mgain", d.micGain);
   g_settings.bleLink       = prefs.getBool("blel", d.bleLink);
   g_settings.wifiMode      = prefs.getUChar("wmode", d.wifiMode);
+  g_settings.micSck        = prefs.getChar("msck", d.micSck); g_settings.micWs = prefs.getChar("mws", d.micWs); g_settings.micSd = prefs.getChar("msd", d.micSd);
+  g_settings.encA          = prefs.getChar("enca", d.encA); g_settings.encB = prefs.getChar("encb", d.encB); g_settings.encSw = prefs.getChar("encsw", d.encSw);
+  g_settings.togglePin     = prefs.getChar("tgl", d.togglePin); g_settings.toggleRole = prefs.getUChar("tglr", d.toggleRole);
+  g_settings.batteryEnabled = prefs.getBool("bat", d.batteryEnabled); g_settings.batteryDivider = prefs.getUShort("batd", d.batteryDivider);
+  g_settings.chime         = prefs.getUChar("chime", d.chime); g_settings.glance = prefs.getBool("glance", d.glance); g_settings.cpuMhz = prefs.getUChar("cpu", d.cpuMhz);
   prefs.getString("ssid", g_settings.wifiSsid, sizeof(g_settings.wifiSsid));
   prefs.getString("pass", g_settings.wifiPass, sizeof(g_settings.wifiPass));
   prefs.getString("bhost", g_settings.bridgeHost, sizeof(g_settings.bridgeHost));
@@ -77,6 +82,11 @@ void settingsSave() {
   prefs.putUChar("mgain", g_settings.micGain);
   prefs.putBool("blel", g_settings.bleLink);
   prefs.putUChar("wmode", g_settings.wifiMode);
+  prefs.putChar("msck", g_settings.micSck); prefs.putChar("mws", g_settings.micWs); prefs.putChar("msd", g_settings.micSd);
+  prefs.putChar("enca", g_settings.encA); prefs.putChar("encb", g_settings.encB); prefs.putChar("encsw", g_settings.encSw);
+  prefs.putChar("tgl", g_settings.togglePin); prefs.putUChar("tglr", g_settings.toggleRole);
+  prefs.putBool("bat", g_settings.batteryEnabled); prefs.putUShort("batd", g_settings.batteryDivider);
+  prefs.putUChar("chime", g_settings.chime); prefs.putBool("glance", g_settings.glance); prefs.putUChar("cpu", g_settings.cpuMhz);
   prefs.putString("ssid", g_settings.wifiSsid);
   prefs.putString("pass", g_settings.wifiPass);
   prefs.putString("bhost", g_settings.bridgeHost);

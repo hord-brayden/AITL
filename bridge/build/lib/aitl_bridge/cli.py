@@ -57,6 +57,8 @@ async def _serve(args) -> None:
     shared.hooks = HookServer(shared.broadcast)
     shared.hooks.admin = shared.admin
     shared.hooks.state = shared.session_state
+    await shared.ntfy_apply()
+    print(f"  ntfy: {'forwarding to ' + shared.ntfy.url + '/' + shared.ntfy.topic if shared.ntfy.enabled else 'off (set a topic in the app to get pushes on your phone)'}")
     tasks.append(asyncio.create_task(shared.now_playing_loop()))
     tasks.append(asyncio.create_task(shared.notification_loop()))
     from .notifications import accessible as _nc_ok
@@ -234,7 +236,10 @@ SETTABLE = {"bleEnabled": "bool", "bleLink": "bool", "wifiEnabled": "bool (resta
             "dictTarget": "int (0 ask AI, 1 type into Mac)", "micGain": "int 1-8", "hidTarget": "int (0 bridge, 1 BLE HID)",
             "brightness": "int 10-255", "rotation": "int 0-3", "model": "str", "screenTimeout": "int seconds (0 never)",
             "invertColors": "bool", "bgrOrder": "bool", "longPressMs": "int", "touchDebounce": "int 1-4", "hapticLed": "bool",
-            "sdLog": "bool", "dictShortcut": "int 0-3", "reboot": "1", "factoryReset": "1"}
+            "sdLog": "bool", "dictShortcut": "int 0-3", "reboot": "1", "factoryReset": "1",
+            "micSck": "int gpio (-1 off)", "micWs": "int gpio", "micSd": "int gpio", "encA": "int gpio (-1 off)", "encB": "int gpio", "encSw": "int gpio",
+            "togglePin": "int gpio (-1 off)", "toggleRole": "int (0 privacy, 1 screen, 2 glance)", "batteryEnabled": "bool", "batteryDivider": "int x1000 (2000 = 2:1)",
+            "chime": "int (0 off, 1 prompts, 2 all)", "glance": "bool", "cpuMhz": "int 160|240"}
 
 
 def cmd_set(args) -> None:
@@ -270,6 +275,45 @@ def cmd_notify(args) -> None:
     from .hooks import admin_request
     res = admin_request("/admin/notify_test", {"title": args.title, "text": args.text})
     print("sent" if res.get("ok") else f"failed: {res.get('error')}")
+
+
+def cmd_wifi(args) -> None:
+    from .hooks import admin_request
+    if args.action == "add":
+        import getpass
+        pw = args.password if args.password is not None else getpass.getpass(f"Password for {args.ssid} (hidden): ")
+        res = admin_request("/admin/wifi_add", {"ssid": args.ssid, "password": pw, "prio": args.prio}, timeout=10)
+    elif args.action == "remove":
+        res = admin_request("/admin/wifi_remove", {"ssid": args.ssid}, timeout=10)
+    elif args.action == "use":
+        res = admin_request("/admin/wifi_use", {"ssid": args.ssid}, timeout=10)
+    elif args.action == "scan":
+        res = admin_request("/admin/wifi_scan", {}, timeout=20)
+        if not res.get("ok"):
+            sys.exit(f"failed: {res.get('error')}")
+        for n in res.get("list", []):
+            print(f"  {n['rssi']:4d} dBm  {n['ssid']}")
+        return
+    else:
+        res = admin_request("/admin/wifi_list", {}, timeout=10)
+    if not res.get("ok"):
+        sys.exit(f"failed: {res.get('error')}")
+    print(f"  Wi-Fi {'enabled' if res.get('enabled') else 'disabled'}; current: {res.get('current') or '-'}")
+    for n in res.get("list", []):
+        print(f"  {'*' if n.get('current') else ' '} {n['ssid']}  (prio {n.get('prio', 0)})")
+
+
+def cmd_ntfy(args) -> None:
+    from .hooks import admin_request
+    if args.action == "test":
+        res = admin_request("/admin/ntfy_test", {}, timeout=15)
+        print("sent" if res.get("ok") else f"failed: {res.get('error')}")
+    else:
+        res = admin_request("/admin/ntfy_status")
+        if "error" in res:
+            sys.exit(res["error"])
+        print(f"  ntfy: {'on' if res.get('enabled') else 'off'}  {res.get('url')}/{res.get('topic') or '<no topic>'}  events {','.join(res.get('events', []))}")
+        print(f"  remote Allow/Deny: {res.get('actions') or 'no Tailscale IP (buttons disabled)'}  token: {'set' if res.get('token') else 'none'}")
 
 
 def cmd_hook(args) -> None:
@@ -409,6 +453,14 @@ def main(argv: list[str] | None = None) -> None:
     hs.add_argument("action", choices=["install", "uninstall", "status"])
     hs.set_defaults(fn=cmd_hooks)
 
+    wf = sub.add_parser("wifi", help="saved Wi-Fi networks on the device (list, add, remove, use, scan)")
+    wf.add_argument("action", choices=["list", "add", "remove", "use", "scan"], nargs="?", default="list")
+    wf.add_argument("ssid", nargs="?", default="")
+    wf.add_argument("--password", default=None, help="omit to be prompted (hidden)")
+    wf.add_argument("--prio", type=int, default=0, help="tie-breaker when several saved networks are visible")
+    wf.set_defaults(fn=cmd_wifi)
+    nf = sub.add_parser("ntfy", help="phone pushes via ntfy: status or send a test")
+    nf.add_argument("action", choices=["status", "test"], nargs="?", default="status"); nf.set_defaults(fn=cmd_ntfy)
     pa = sub.add_parser("pair", help="serve with Wi-Fi and a pairing window open")
     pa.add_argument("--seconds", type=int, default=180)
     pa.add_argument("--port"); pa.add_argument("--ws-port", type=int); pa.add_argument("--ble", action="store_true")

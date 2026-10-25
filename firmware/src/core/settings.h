@@ -32,6 +32,20 @@ struct Settings {
   uint8_t  micGain      = 4;     // 1..8 (shift applied to 24-bit samples)
   bool     bleLink      = false; // expose the bridge protocol over BLE (Nordic UART) as well as HID
   uint8_t  wifiMode     = 0;     // 0 = signed frames over ws (fits classic ESP32), 1 = TLS pinned (needs PSRAM)
+  // Hardware add-ons (-1 = not fitted). Pins are runtime settings so the case wiring can change without a reflash.
+  int8_t   micSck       = PIN_MIC_SCK;
+  int8_t   micWs        = PIN_MIC_WS;
+  int8_t   micSd        = PIN_MIC_SD;
+  int8_t   encA         = -1;
+  int8_t   encB         = -1;
+  int8_t   encSw        = -1;
+  int8_t   togglePin    = -1;
+  uint8_t  toggleRole   = 0;     // 0 privacy (mute dictation), 1 screen off, 2 glance mode
+  bool     batteryEnabled = false;
+  uint16_t batteryDivider = 2000; // x1000: ADC millivolts * divider = battery millivolts (2.0 typical)
+  uint8_t  chime        = 1;     // 0 off, 1 permission/needs-input only, 2 all alerts
+  bool     glance       = false; // large type for the monitor-hook mount
+  uint8_t  cpuMhz       = 240;   // 160 runs cooler in a sealed case
   char     wifiSsid[33] = "";
   char     wifiPass[65] = "";
   char     bridgeHost[64] = "";

@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "title_model": "",          # model used to title chats; empty = same as the chat's model
     },
     "notifications": {"enabled": True, "apps": [], "ignore": [], "modal": False, "poll_seconds": 4},   # macOS notifications -> device inbox (needs Full Disk Access)
+    "ntfy": {"url": "https://ntfy.sh", "topic": "", "events": ["permission", "notify", "done"], "remote_bind": "tailscale", "remote_port": 7779},   # phone push; token via `aitl keys set ntfy`
     "buttons": {"boot_short": "dictate", "boot_double": "next_chat", "boot_long": "talk"},
     "stt": {"engine": "auto", "whisper_model": "mlx-community/whisper-base-mlx", "gemini_model": "gemini-flash-latest", "language": "en"},
     "hid": {

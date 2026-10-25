@@ -46,3 +46,19 @@ Device log lines start with `# ` and are ignored by the bridge. Frames are ≤ 6
 | `reboot` / `ping` / `pong` | |
 
 Adding a message: handle it in `firmware/src/core/app.cpp::onMessage` and `bridge/aitl_bridge/session.py::handle`.
+
+## Networks, Bluetooth bonds, diagnostics (added 2026-10-24)
+Device → bridge: `hello` now also carries `up` (seconds), `reset` (reason string), `diag` (newest-first ring of
+`{reason, up, minheap}`) and `bat` (%) when the gauge is enabled. `wifi.networks {list:[{ssid,prio,current}], current,
+enabled}` answers any `wifi.*` request; `wifi.scan {list:[{ssid,rssi}]}` answers a scan; `ble.bonds {count}` answers
+`ble.forget`.
+
+Bridge → device: `hello.req` (answer with `hello` right away; sent on every serial open), `wifi.add {ssid,pass,prio}`
+(USB only), `wifi.remove {ssid}`, `wifi.use {ssid}` (switch now), `wifi.list`, `wifi.scan`, `ble.forget`.
+`prov.wifi` now upserts into the table instead of replacing the single network. New `settings.set` keys: `micSck`,
+`micWs`, `micSd`, `encA`, `encB`, `encSw`, `togglePin`, `toggleRole`, `batteryEnabled`, `batteryDivider`, `chime`,
+`glance`, `cpuMhz`.
+
+The device keeps up to 8 networks in LittleFS `/wifi.json`. On connect it scans when more than one is saved and joins
+the strongest visible one (RSSI + 20·prio); a `wifi.use` forces one network for the next connect. Retries back off from
+20 s to 2 min while no saved network is in range.

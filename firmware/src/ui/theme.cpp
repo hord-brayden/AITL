@@ -1,5 +1,6 @@
 #include "theme.h"
 #include "../config.h"
+#include "../core/settings.h"
 
 namespace theme {
 #if defined(AITL_UI_BIG)
@@ -9,7 +10,7 @@ lv_coord_t btnH() { return 50; }
 lv_coord_t rowH() { return 50; }
 lv_coord_t chipH() { return 30; }
 const lv_font_t* fontTitle() { return &lv_font_montserrat_28; }
-const lv_font_t* fontBody() { return &lv_font_montserrat_18; }
+const lv_font_t* fontBody() { return g_settings.glance ? &lv_font_montserrat_20 : &lv_font_montserrat_18; }
 const lv_font_t* fontSmall() { return &lv_font_montserrat_16; }
 const lv_font_t* fontLabel() { return &lv_font_montserrat_14; }
 const lv_font_t* fontIcon() { return &lv_font_montserrat_28; }
@@ -20,7 +21,7 @@ lv_coord_t btnH() { return 38; }
 lv_coord_t rowH() { return 38; }
 lv_coord_t chipH() { return 22; }
 const lv_font_t* fontTitle() { return &lv_font_montserrat_20; }
-const lv_font_t* fontBody() { return &lv_font_montserrat_14; }
+const lv_font_t* fontBody() { return g_settings.glance ? &lv_font_montserrat_16 : &lv_font_montserrat_14; }
 const lv_font_t* fontSmall() { return &lv_font_montserrat_12; }
 const lv_font_t* fontLabel() { return &lv_font_montserrat_10; }
 const lv_font_t* fontIcon() { return &lv_font_montserrat_20; }

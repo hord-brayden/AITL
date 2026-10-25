@@ -50,7 +50,9 @@ class SerialTransport:
             try:
                 self.ser = serial.Serial(None, self.baud, timeout=0.2, dsrdtr=False, rtscts=False)
                 self.ser.port = port
-                self.ser.dtr = False; self.ser.rts = False     # set BEFORE open so the CH340 never pulses EN/IO0
+                # Measured on the CH340 boards: DTR=0/RTS=0 at open resets the ESP32 (EN pulse), DTR=0/RTS=1 HOLDS it in
+                # reset, DTR=1/RTS=1 and DTR=1/RTS=0 leave it running. Both asserted is the safe state, set BEFORE open.
+                self.ser.dtr = True; self.ser.rts = True
                 self.ser.open()
             except (serial.SerialException, OSError) as e:
                 log.warning("serial open failed (%s): %s", port, e)
@@ -58,6 +60,10 @@ class SerialTransport:
             log.info("serial: %s @ %d", port, self.baud)
             self.session = DeviceSession(self.shared, self.send, transport="serial", peer=port)
             buf = b""
+            try:
+                await loop.run_in_executor(None, self.ser.write, b'{"t":"hello.req"}\n')   # a running device answers at once
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 while True:
                     chunk = await loop.run_in_executor(None, self.ser.read, 4096)
@@ -91,6 +97,7 @@ class SerialTransport:
                     await self.session.close()
                 self.session = None
                 try:
+                    self.ser.dtr = True; self.ser.rts = True       # never leave DTR=0/RTS=1 behind: that holds the ESP32 in reset
                     self.ser.close()
                 except Exception:  # noqa: BLE001
                     pass
